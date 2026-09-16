@@ -21,7 +21,6 @@ dp = Dispatcher()
 
 DB = "cat.db"
 FEED_COOLDOWN = 30
-DAILY_COOLDOWN = 86400
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "stars": 50, "desc": "+100 монет сразу"},
@@ -75,7 +74,6 @@ async def update_cat(user_id, **fields):
         await db.commit()
 
 
-# ---------- Логика ----------
 def xp_for_next(level):
     return level * 100
 
@@ -146,33 +144,50 @@ def bottom_menu():
             [KeyboardButton(text="🍖 Покормить"), KeyboardButton(text="🎾 Поиграть")],
             [KeyboardButton(text="🎲 Угадай"),    KeyboardButton(text="🎁 Бонус дня")],
             [KeyboardButton(text="🛒 Магазин"),   KeyboardButton(text="👤 Профиль")],
-            [KeyboardButton(text="🏆 Топ"),       KeyboardButton(text="❓ Помощь")],
-            [KeyboardButton(text="❌ Скрыть меню")],
+            [KeyboardButton(text="❓ Помощь"),    KeyboardButton(text="❌ Скрыть меню")],
         ],
         resize_keyboard=True,
         is_persistent=False,
     )
 
 
+# ---------- Тексты ----------
+BONUS_SOON_TEXT = (
+    "🎁 <b>Бонус дня — в разработке</b>\n\n"
+    "Эта функция скоро будет доступна.\n"
+    "Мы уже работаем над ней — совсем скоро ты сможешь получать\n"
+    "ежедневные награды за вход в бота!\n\n"
+    "🐾 <i>Спасибо, что играешь с нами.</i>"
+)
+
+
 HELP_TEXT = (
-    "❓ <b>Помощь</b>\n\n"
-    "<b>Команды:</b>\n"
+    "❓ <b>Что делает этот бот?</b>\n\n"
+
+    "🐱 <b>Это игра-тамагочи про котика.</b>\n"
+    "Ты заводишь своего питомца, кормишь его, играешь с ним,\n"
+    "качаешь уровень и зарабатываешь монеты.\n\n"
+
+    "<b>🎮 Что можно делать:</b>\n"
+    "🍖 <b>Покормить</b> — раз в 30 сек даёт монеты\n"
+    "🎾 <b>Поиграть</b> — тратит сытость, даёт монеты и опыт\n"
+    "🎲 <b>Угадай число</b> — мини-игра, угадай 1–10, ставка 20 монет,\n"
+    "     угадал — <b>+100 монет</b>\n"
+    "🛒 <b>Магазин</b> — покупки за ⭐ Telegram Stars\n"
+    "👤 <b>Профиль</b> — посмотреть своего котика\n\n"
+
+    "<b>💎 Что продаётся в магазине:</b>\n"
+    "🍖 Корм x10 — 50 ⭐ → +100 монет\n"
+    "⚡ Ускоритель x2 на 24ч — 100 ⭐ → двойные монеты\n"
+    "👑 VIP-котик — 250 ⭐ → скин + +10 монет каждый час\n\n"
+
+    "<b>📋 Команды:</b>\n"
     "/start — начать\n"
     "/menu  — показать меню\n"
     "/help  — эта справка\n"
-    "/top   — топ игроков\n"
     "/hide  — скрыть меню\n\n"
-    "<b>Кнопки внизу:</b>\n"
-    "🍖 Покормить — +монеты (раз в 30 сек)\n"
-    "🎾 Поиграть  — +XP и монеты\n"
-    "🎲 Угадай    — мини-игра на монеты\n"
-    "🎁 Бонус дня — бесплатные монеты раз в 24ч\n"
-    "🛒 Магазин   — покупки за ⭐ Stars\n"
-    "👤 Профиль   — твой котик\n"
-    "🏆 Топ       — рейтинг\n"
-    "❌ Скрыть меню — убрать кнопки\n\n"
-    "👑 <b>VIP</b> — +10 монет каждый час\n"
-    "🔥 <b>Стрик</b> — заходи каждый день, бонус растёт!"
+
+    "Приятной игры 🐾"
 )
 
 
@@ -235,50 +250,6 @@ async def _do_play(user_id, target):
         await target.answer()
 
 
-async def _do_daily(user_id, target):
-    cat = await get_cat(user_id)
-    now = int(time.time())
-    last = cat[9]
-    streak = cat[10]
-
-    if now - last < DAILY_COOLDOWN:
-        left = DAILY_COOLDOWN - (now - last)
-        h = left // 3600
-        m = (left % 3600) // 60
-        msg_text = f"⏰ Бонус уже получен. Следующий через {h}ч {m}м"
-        if isinstance(target, Message):
-            return await target.answer(msg_text)
-        return await target.answer(msg_text, show_alert=True)
-
-    if now - last < DAILY_COOLDOWN * 2 and last > 0:
-        streak += 1
-    else:
-        streak = 1
-
-    base = 50
-    bonus = base + (streak - 1) * 10
-    if is_vip(cat): bonus *= 2
-
-    await update_cat(user_id, coins=cat[4] + bonus, last_daily=now, streak=streak)
-    leveled, level = await add_xp(user_id, 15)
-
-    txt = (
-        f"🎁 <b>Ежедневный бонус!</b>\n"
-        f"+{bonus} монет 💰\n"
-        f"🔥 Стрик: <b>{streak}</b> дней"
-    )
-    if streak >= 3:
-        txt += "\n⚡ Отличная серия!"
-    if leveled: txt += f"\n🎉 Новый уровень: <b>{level}</b>!"
-    cat = await get_cat(user_id)
-    full = render(cat) + f"\n\n{txt}"
-    if isinstance(target, Message):
-        await target.answer(full, reply_markup=bottom_menu())
-    else:
-        await target.message.answer(full, reply_markup=bottom_menu())
-        await target.answer()
-
-
 async def _show_shop(target):
     text = "🛒 <b>Магазин за Telegram Stars</b>\n\n"
     for item in SHOP.values():
@@ -293,25 +264,19 @@ async def _show_shop(target):
         await target.answer()
 
 
-async def _show_top(target):
-    async with aiosqlite.connect(DB) as db:
-        cur = await db.execute(
-            "SELECT user_id, level, coins, vip FROM cats ORDER BY level DESC, coins DESC LIMIT 10"
-        )
-        rows = await cur.fetchall()
-    if not rows:
-        text = "Пока никого нет 🐾"
-    else:
-        medals = ["🥇", "🥈", "🥉"]
-        text = "🏆 <b>Топ-10 котиков</b>\n\n"
-        for i, (uid, lvl, coins, vip) in enumerate(rows):
-            medal = medals[i] if i < 3 else f"{i+1}."
-            crown = "👑" if vip else ""
-            text += f"{medal} {crown} Lvl <b>{lvl}</b> — 💰 {coins}\n"
+async def _show_bonus_soon(target):
     if isinstance(target, Message):
-        await target.answer(text, reply_markup=bottom_menu())
+        await target.answer(BONUS_SOON_TEXT, reply_markup=bottom_menu())
     else:
-        await target.message.answer(text, reply_markup=bottom_menu())
+        await target.message.answer(BONUS_SOON_TEXT, reply_markup=bottom_menu())
+        await target.answer()
+
+
+async def _show_help(target):
+    if isinstance(target, Message):
+        await target.answer(HELP_TEXT, reply_markup=bottom_menu())
+    else:
+        await target.message.answer(HELP_TEXT, reply_markup=bottom_menu())
         await target.answer()
 
 
@@ -363,12 +328,7 @@ async def cmd_menu(msg: Message):
 
 @dp.message(Command("help"))
 async def cmd_help(msg: Message):
-    await msg.answer(HELP_TEXT, reply_markup=bottom_menu())
-
-
-@dp.message(Command("top"))
-async def cmd_top(msg: Message):
-    await _show_top(msg)
+    await _show_help(msg)
 
 
 @dp.message(Command("hide"))
@@ -395,7 +355,7 @@ async def btn_guess(msg: Message):
 
 @dp.message(F.text == "🎁 Бонус дня")
 async def btn_daily(msg: Message):
-    await _do_daily(msg.from_user.id, msg)
+    await _show_bonus_soon(msg)
 
 
 @dp.message(F.text == "🛒 Магазин")
@@ -409,14 +369,9 @@ async def btn_profile(msg: Message):
     await msg.answer(render(cat), reply_markup=bottom_menu())
 
 
-@dp.message(F.text == "🏆 Топ")
-async def btn_top(msg: Message):
-    await _show_top(msg)
-
-
 @dp.message(F.text == "❓ Помощь")
 async def btn_help(msg: Message):
-    await msg.answer(HELP_TEXT, reply_markup=bottom_menu())
+    await _show_help(msg)
 
 
 @dp.message(F.text == "❌ Скрыть меню")
@@ -427,7 +382,7 @@ async def btn_hide(msg: Message):
     )
 
 
-# ---------- Угадай число: обработка ввода ----------
+# ---------- Угадай число ----------
 @dp.message(F.text.regexp(r"^\d+$"))
 async def guess_handler(msg: Message):
     user_id = msg.from_user.id
@@ -496,7 +451,7 @@ async def cb_play(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "daily")
 async def cb_daily(cb: CallbackQuery):
-    await _do_daily(cb.from_user.id, cb)
+    await _show_bonus_soon(cb)
 
 
 @dp.callback_query(F.data == "guess")
@@ -565,7 +520,7 @@ async def on_paid(msg: Message):
             pass
 
 
-# ---------- Фоновые задачи ----------
+# ---------- Фон ----------
 async def vip_income_loop():
     while True:
         async with aiosqlite.connect(DB) as db:
@@ -578,7 +533,6 @@ async def setup_commands():
     commands = [
         BotCommand(command="start", description="🐱 Запустить"),
         BotCommand(command="menu",  description="📋 Меню"),
-        BotCommand(command="top",   description="🏆 Топ игроков"),
         BotCommand(command="hide",  description="❌ Скрыть меню"),
         BotCommand(command="help",  description="❓ Помощь"),
     ]
