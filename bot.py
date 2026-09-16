@@ -11,9 +11,7 @@ from aiogram.types import (
 )
 from aiogram.client.default import DefaultBotProperties
 
-BOT_TOKEN = os.getenv("8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY")  # токен от @BotFather
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-
+BOT_TOKEN = "8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY"
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
