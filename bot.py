@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 # ==== НАСТРОЙКИ ====
 BOT_TOKEN = "8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY"
 ADMIN_ID = 5965370780
-SUPPORT_USERNAME = "artemizmailov"   # ← замени на свой юзернейм (без @)
+SUPPORT_USERNAME = "artemizmailov"
 # ===================
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -24,6 +24,7 @@ DB = "cat.db"
 FEED_COOLDOWN = 30
 DAILY_COOLDOWN = 86400
 REMIND_COOLDOWN = 86400
+REFUND_WINDOW = 86400  # 24 часа на возврат
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "stars": 50, "desc": "+100 монет сразу"},
@@ -61,15 +62,19 @@ async def init_db():
                 item_key TEXT,
                 stars INTEGER,
                 charge_id TEXT,
-                created_at INTEGER
+                created_at INTEGER,
+                refunded INTEGER DEFAULT 0
             )
         """)
-        # миграции колонок
         for col, default in [("last_seen", "0"), ("last_remind", "0")]:
             try:
                 await db.execute(f"ALTER TABLE cats ADD COLUMN {col} INTEGER DEFAULT {default}")
             except Exception:
                 pass
+        try:
+            await db.execute("ALTER TABLE payments ADD COLUMN refunded INTEGER DEFAULT 0")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -174,14 +179,6 @@ def bottom_menu():
 
 
 # ==================== ТЕКСТЫ ====================
-BONUS_SOON_TEXT = (
-    "🎁 <b>Бонус дня — в разработке</b>\n\n"
-    "Эта функция скоро будет доступна.\n"
-    "Мы уже работаем над ней — совсем скоро ты сможешь получать\n"
-    "ежедневные награды за вход в бота!\n\n"
-    "🐾 <i>Спасибо, что играешь с нами.</i>"
-)
-
 HELP_TEXT = (
     "❓ <b>Что делает этот бот?</b>\n\n"
     "🐱 <b>Это игра-тамагочи про котика.</b>\n"
@@ -189,16 +186,19 @@ HELP_TEXT = (
     "<b>🎮 Кнопки внизу:</b>\n"
     "🍖 Покормить — +монеты (раз в 30 сек)\n"
     "🎾 Поиграть — +XP и монеты\n"
-    "🎲 Угадай — мини-игра на монеты\n"
-    "🎁 Бонус дня — скоро\n"
+    "🎲 Угадай — мини-игра\n"
+    "🎁 Бонус дня — награда раз в 24 часа\n"
     "🛒 Магазин — покупки за ⭐ Stars\n"
     "👤 Профиль — твой котик\n\n"
     "<b>📋 Команды:</b>\n"
     "/start — начать\n"
-    "/menu — показать меню\n"
-    "/help — эта справка\n"
+    "/menu — меню\n"
+    "/help — справка\n"
+    "/daily — бонус дня\n"
     "/support — поддержка\n"
     "/terms — условия\n"
+    "/paysupport — оплата\n"
+    "/refund — вернуть звёзды\n"
     "/mute — отключить напоминания\n"
     "/unmute — включить напоминания\n"
     "/hide — скрыть меню\n\n"
@@ -208,9 +208,8 @@ HELP_TEXT = (
 TERMS_TEXT = (
     "📜 <b>Условия использования</b>\n\n"
     "1. Это игра-тамагочи. Все покупки — цифровые товары.\n"
-    "2. Монеты и бонусы внутри игры не имеют денежной ценности\n"
-    "   и не подлежат обмену на реальные деньги.\n"
-    "3. Возврат средств за Stars возможен через /paysupport\n"
+    "2. Монеты и бонусы внутри игры не имеют денежной ценности.\n"
+    "3. Возврат средств за Stars возможен через /refund\n"
     "   в течение 24 часов после покупки.\n"
     "4. Игра предоставляется «как есть».\n"
     "5. Мы оставляем право менять условия.\n\n"
@@ -228,7 +227,7 @@ PAYSUPPORT_TEXT = (
     "💳 <b>Поддержка по оплате</b>\n\n"
     "Если проблема с оплатой:\n"
     "• Списание прошло, но товар не пришёл — напиши нам\n"
-    "• Хочешь вернуть Stars — можно в течение 24ч\n"
+    "• Хочешь вернуть Stars — команда /refund (в течение 24ч)\n"
     "• Двойное списание — вернём лишнее\n\n"
     f"📧 Связь: @{SUPPORT_USERNAME}\n\n"
     "⚠️ <b>Важно:</b> поддержка Telegram не помогает с покупками внутри ботов."
@@ -252,9 +251,8 @@ class SeenMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-# ==================== ДЕЙСТВИЯ ====================
+# ==================== АНИМАЦИЯ ====================
 async def _animate(target, frames, delay=0.4):
-    """Плавная анимация через редактирование сообщения."""
     msg = None
     if isinstance(target, CallbackQuery):
         msg = target.message
@@ -273,6 +271,7 @@ async def _animate(target, frames, delay=0.4):
     return msg
 
 
+# ==================== ДЕЙСТВИЯ ====================
 async def _do_feed(user_id, target):
     cat = await get_cat(user_id)
     now = int(time.time())
@@ -283,7 +282,6 @@ async def _do_feed(user_id, target):
             return await target.answer(msg_text)
         return await target.answer(msg_text, show_alert=False)
 
-    # АНИМАЦИЯ
     anim = await _animate(target, [
         "🍖 Кормим котика.",
         "🍖 Кормим котика..",
@@ -350,10 +348,76 @@ async def _do_play(user_id, target):
         await target.answer()
 
 
+async def _do_daily(user_id, target):
+    """Ежедневный бонус — рабочая первая версия."""
+    cat = await get_cat(user_id)
+    now = int(time.time())
+    last = cat[9]
+    streak = cat[10]
+
+    # Проверка кулдауна
+    if now - last < DAILY_COOLDOWN:
+        left = DAILY_COOLDOWN - (now - last)
+        h = left // 3600
+        m = (left % 3600) // 60
+        msg_text = f"⏰ Бонус уже получен. Следующий через <b>{h}ч {m}м</b>"
+        if isinstance(target, Message):
+            return await target.answer(msg_text)
+        return await target.answer(msg_text, show_alert=True)
+
+    # Считаем стрик
+    if 0 < last and now - last < DAILY_COOLDOWN * 2:
+        streak += 1
+    else:
+        streak = 1
+
+    # Размер бонуса
+    base = 50
+    bonus = base + (streak - 1) * 15   # +15 монет за каждый день стрика
+    if streak >= 7:
+        bonus += 100                     # бонус за неделю
+    if is_vip(cat):
+        bonus *= 2                       # VIP x2
+
+    await update_cat(user_id, coins=cat[4] + bonus, last_daily=now, streak=streak)
+    leveled, level = await add_xp(user_id, 20)
+
+    # Готовим сообщение
+    txt = (
+        f"🎁 <b>Бонус выдан!</b>\n\n"
+        f"💰 Ты получил: <b>+{bonus} монет</b>\n"
+        f"🔥 Стрик: <b>{streak}</b> " + ("день" if streak == 1 else "дней")
+    )
+    if streak >= 7:
+        txt += "\n🎉 <b>Неделя подряд! +100 монет сверху!</b>"
+    elif streak >= 3:
+        txt += "\n⚡ Отличная серия!"
+    if is_vip(cat):
+        txt += "\n👑 VIP-бонус: x2"
+    if leveled:
+        txt += f"\n🎉 Новый уровень: <b>{level}</b>!"
+
+    txt += (
+        "\n\n📢 <b>Это первая версия бонуса.</b>\n"
+        "В следующих обновлениях будет больше наград,\n"
+        "редкие скины и особые предметы. Следи за апдейтами!"
+    )
+
+    cat = await get_cat(user_id)
+    full = render(cat) + "\n\n" + txt
+
+    if isinstance(target, Message):
+        await target.answer(full, reply_markup=bottom_menu())
+    else:
+        await target.message.answer(full, reply_markup=bottom_menu())
+        await target.answer()
+
+
 async def _show_shop(target):
     text = "🛒 <b>Магазин за Telegram Stars</b>\n\n"
     for item in SHOP.values():
         text += f"• {item['title']} — <b>{item['stars']} ⭐</b>\n  <i>{item['desc']}</i>\n"
+    text += "\n💸 Вернуть покупку: /refund (в течение 24ч)"
     if isinstance(target, Message):
         await target.answer(text, reply_markup=shop_kb())
     else:
@@ -361,14 +425,6 @@ async def _show_shop(target):
             await target.message.edit_text(text, reply_markup=shop_kb())
         except Exception:
             await target.message.answer(text, reply_markup=shop_kb())
-        await target.answer()
-
-
-async def _show_soon(target):
-    if isinstance(target, Message):
-        await target.answer(BONUS_SOON_TEXT, reply_markup=bottom_menu())
-    else:
-        await target.message.answer(BONUS_SOON_TEXT, reply_markup=bottom_menu())
         await target.answer()
 
 
@@ -412,6 +468,7 @@ async def cmd_start(msg: Message):
         "🐱 <b>Привет! Это твой котик.</b>\n\n"
         "Корми, играй, качай уровень.\n"
         "За <b>Telegram Stars</b> покупай бонусы в магазине.\n\n"
+        "🎁 Не забудь про <b>бонус дня</b> — раз в 24 часа!\n\n"
         "📌 Кнопки внизу — главное меню.\n"
         "📌 /help — справка, /menu — меню.\n\n"
         + render(cat),
@@ -428,6 +485,11 @@ async def cmd_menu(msg: Message):
 @dp.message(Command("help"))
 async def cmd_help(msg: Message):
     await _show_help(msg)
+
+
+@dp.message(Command("daily"))
+async def cmd_daily(msg: Message):
+    await _do_daily(msg.from_user.id, msg)
 
 
 @dp.message(Command("terms"))
@@ -457,12 +519,8 @@ async def cmd_mute(msg: Message):
         await db.execute("UPDATE cats SET last_remind=9999999999 WHERE user_id=?",
                          (msg.from_user.id,))
         await db.commit()
-    await msg.answer(
-        "🔕 <b>Напоминания отключены</b>\n\n"
-        "Бот больше не будет тебе писать.\n"
-        "Включить обратно: /unmute",
-        reply_markup=bottom_menu()
-    )
+    await msg.answer("🔕 <b>Напоминания отключены</b>\n\nВключить: /unmute",
+                     reply_markup=bottom_menu())
 
 
 @dp.message(Command("unmute"))
@@ -471,13 +529,136 @@ async def cmd_unmute(msg: Message):
         await db.execute("UPDATE cats SET last_remind=0 WHERE user_id=?",
                          (msg.from_user.id,))
         await db.commit()
+    await msg.answer("🔔 <b>Напоминания включены</b>",
+                     reply_markup=bottom_menu())
+
+
+# ==================== ВОЗВРАТ ЗВЁЗД ====================
+@dp.message(Command("refund"))
+async def cmd_refund(msg: Message):
+    user_id = msg.from_user.id
+    now = int(time.time())
+
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute(
+            "SELECT id, item_key, stars, charge_id, created_at FROM payments "
+            "WHERE user_id=? AND refunded=0 ORDER BY created_at DESC LIMIT 5",
+            (user_id,)
+        )
+        payments = await cur.fetchall()
+
+    if not payments:
+        return await msg.answer(
+            "💸 <b>У тебя нет покупок для возврата</b>\n\n"
+            "Либо ты ничего не покупал, либо уже вернул.",
+            reply_markup=bottom_menu()
+        )
+
+    kb_rows = []
+    for pid, key, stars, charge_id, ts in payments:
+        ago = now - ts
+        if ago > REFUND_WINDOW:
+            continue  # прошло больше 24ч
+        item = SHOP.get(key, {"title": key})
+        kb_rows.append([InlineKeyboardButton(
+            text=f"↩️ Вернуть {item['title']} — {stars}⭐",
+            callback_data=f"refund:{pid}"
+        )])
+
+    if not kb_rows:
+        return await msg.answer(
+            "💸 <b>Нет покупок для возврата</b>\n\n"
+            "Возврат возможен только в течение <b>24 часов</b> после покупки.",
+            reply_markup=bottom_menu()
+        )
+
     await msg.answer(
-        "🔔 <b>Напоминания включены</b>\n\n"
-        "Бот будет напоминать, если ты давно не заходил.",
-        reply_markup=bottom_menu()
+        "💸 <b>Возврат покупки</b>\n\n"
+        "Выбери покупку для возврата.\n"
+        "⭐ Звёзды вернутся сразу.\n"
+        "⚠️ Товар будет отменён (монеты/усилитель/VIP сгорят).\n\n"
+        "Возврат доступен в течение 24 часов после покупки.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
     )
 
 
+@dp.callback_query(F.data.startswith("refund:"))
+async def cb_refund(cb: CallbackQuery):
+    try:
+        pid = int(cb.data.split(":")[1])
+    except Exception:
+        return await cb.answer("Ошибка", show_alert=True)
+
+    user_id = cb.from_user.id
+    now = int(time.time())
+
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute(
+            "SELECT item_key, stars, charge_id, created_at, refunded FROM payments WHERE id=?",
+            (pid,)
+        )
+        row = await cur.fetchone()
+
+    if not row:
+        return await cb.answer("Платёж не найден", show_alert=True)
+
+    key, stars, charge_id, created_at, refunded = row
+
+    if refunded:
+        return await cb.answer("Этот платёж уже возвращён", show_alert=True)
+    if user_id == 0:
+        return await cb.answer("Ошибка", show_alert=True)
+    if now - created_at > REFUND_WINDOW:
+        return await cb.answer("Прошло больше 24 часов", show_alert=True)
+
+    # Откат товара
+    cat = await get_cat(user_id)
+    if key == "food10":
+        await update_cat(user_id, coins=max(0, cat[4] - 100))
+    elif key == "boost":
+        await update_cat(user_id, boost_until=0)
+    elif key == "vip":
+        await update_cat(user_id, vip=0)
+
+    # Возврат через Telegram API
+    try:
+        await bot.refund_star_payment(
+            user_id=user_id,
+            telegram_payment_charge_id=charge_id
+        )
+        # Помечаем как возвращённый
+        async with aiosqlite.connect(DB) as db:
+            await db.execute("UPDATE payments SET refunded=1 WHERE id=?", (pid,))
+            await db.commit()
+
+        await cb.message.edit_text(
+            f"✅ <b>Возврат оформлен</b>\n\n"
+            f"⭐ <b>{stars} звёзд</b> вернулись на твой баланс.\n"
+            f"Товар отменён.\n\n"
+            f"Спасибо, что играл! Возвращайся 😊"
+        )
+
+        # Уведомление админу
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"↩️ <b>Возврат!</b>\n"
+                f"👤 <code>{user_id}</code>\n"
+                f"📦 {key} — {stars} ⭐"
+            )
+        except Exception:
+            pass
+
+    except Exception as e:
+        await cb.message.edit_text(
+            f"❌ <b>Ошибка возврата</b>\n\n"
+            f"<code>{e}</code>\n\n"
+            f"Напиши админу: @{SUPPORT_USERNAME}"
+        )
+    await cb.answer()
+
+
+# ==================== STATS ====================
 @dp.message(Command("stats"))
 async def cmd_stats(msg: Message):
     if msg.from_user.id != ADMIN_ID:
@@ -504,7 +685,9 @@ async def cmd_stats(msg: Message):
             cur = await db.execute("SELECT AVG(level) FROM cats")
             avg_level = (await cur.fetchone())[0] or 0
 
-            cur = await db.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments")
+            cur = await db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments WHERE refunded=0"
+            )
             row = await cur.fetchone()
             buys, total_stars = row if row else (0, 0)
 
@@ -541,7 +724,7 @@ async def btn_guess(msg: Message):
 
 @dp.message(F.text == "🎁 Бонус дня")
 async def btn_daily(msg: Message):
-    await _show_soon(msg)
+    await _do_daily(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🛒 Магазин")
@@ -637,7 +820,7 @@ async def cb_play(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "daily")
 async def cb_daily(cb: CallbackQuery):
-    await _show_soon(cb)
+    await _do_daily(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "guess")
@@ -696,7 +879,6 @@ async def on_paid(msg: Message):
     stars = msg.successful_payment.total_amount
     charge_id = msg.successful_payment.telegram_payment_charge_id
 
-    # сохраняем платёж
     try:
         async with aiosqlite.connect(DB) as db:
             await db.execute(
@@ -721,7 +903,11 @@ async def on_paid(msg: Message):
     else:
         text = "✅ Оплата получена!"
 
-    await msg.answer(f"✅ <b>Оплата прошла!</b>\n{text}", reply_markup=bottom_menu())
+    await msg.answer(
+        f"✅ <b>Оплата прошла!</b>\n{text}\n\n"
+        f"💸 Вернуть можно в течение 24ч: /refund",
+        reply_markup=bottom_menu()
+    )
 
     if ADMIN_ID:
         try:
@@ -751,7 +937,7 @@ async def vip_income_loop():
 
 
 async def reminder_loop():
-    await asyncio.sleep(60)  # подождём, пока бот стартует
+    await asyncio.sleep(60)
     while True:
         try:
             now = int(time.time())
@@ -774,8 +960,7 @@ async def reminder_loop():
                 if days >= 7:
                     text = (
                         f"🐱 <b>Твой котик {name} очень скучает!</b>\n\n"
-                        f"Ты не заходил уже <b>{days} дней</b>. "
-                        f"Он голодный и грустный 😿\n\n"
+                        f"Ты не заходил уже <b>{days} дней</b> 😿\n\n"
                         f"Зайди, покорми его! 🍖"
                     )
                 elif days >= 3:
@@ -784,7 +969,7 @@ async def reminder_loop():
                         f"Ты не заходил <b>{days} дня</b>. Котик хочет есть 🍖"
                     )
                 elif days >= 1:
-                    text = f"🐱 <b>{name} проголодался!</b>\n\nПокорми его — он ждёт 🍖"
+                    text = f"🐱 <b>{name} проголодался!</b>\n\nПокорми его 🍖"
                 else:
                     continue
 
@@ -824,9 +1009,11 @@ async def setup_commands():
     commands = [
         BotCommand(command="start",      description="🐱 Запустить"),
         BotCommand(command="menu",       description="📋 Меню"),
+        BotCommand(command="daily",      description="🎁 Бонус дня"),
         BotCommand(command="help",       description="❓ Помощь"),
         BotCommand(command="support",    description="🆘 Поддержка"),
         BotCommand(command="paysupport", description="💳 Оплата"),
+        BotCommand(command="refund",     description="💸 Вернуть звёзды"),
         BotCommand(command="terms",      description="📜 Условия"),
         BotCommand(command="mute",       description="🔕 Отключить напоминания"),
         BotCommand(command="unmute",     description="🔔 Включить напоминания"),
