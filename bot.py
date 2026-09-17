@@ -43,7 +43,7 @@ SKINS = {
     "tiger":   {"emoji": "🐯", "name": "Тигр", "coins": 250},
     "lion":    {"emoji": "🦁", "name": "Лев", "coins": 400},
     "leopard": {"emoji": "🐆", "name": "Пантера", "coins": 600},
-    "bear":    {"emoji": "🐻", "name": "Медведь-кот", "coins": 800},
+    "bear":    {"emoji": "🐻", "name": "Медведь", "coins": 800},
     "panda":   {"emoji": "🐼", "name": "Панда", "coins": 1000},
     "wolf":    {"emoji": "🐺", "name": "Волк", "coins": 1300},
     "unicorn": {"emoji": "🦄", "name": "Единорог", "coins": 1800},
@@ -51,7 +51,7 @@ SKINS = {
     "king":    {"emoji": "👑", "name": "Королевский", "coins": 3000},
     "robot":   {"emoji": "🤖", "name": "Кот-робот", "coins": 3500},
     "cosmo":   {"emoji": "🚀", "name": "Космо-кот", "coins": 4000},
-    "ghost":   {"emoji": "👻", "name": "Кот-призрак", "coins": 4500},
+    "ghost":   {"emoji": "👻", "name": "Призрак", "coins": 4500},
     "fire":    {"emoji": "🔥", "name": "Огненный", "coins": 5000},
 }
 
@@ -1195,6 +1195,4 @@ async def main():
     print("Бот запущен...")
     await dp.start_polling(bot)
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
