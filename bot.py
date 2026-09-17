@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 # ==== НАСТРОЙКИ ====
 BOT_TOKEN = "8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY"
 ADMIN_ID = 5965370780
-SUPPORT_USERNAME = "artemizmailov"
+CONTACT_USERNAME = "Artemchic2009"   # без @
 # ===================
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -24,8 +24,8 @@ DB = "cat.db"
 FEED_COOLDOWN = 30
 DAILY_COOLDOWN = 86400
 REMIND_COOLDOWN = 86400
-PLAY_REMIND_COOLDOWN = 7200   # напоминание «поиграть» — раз в 2 часа
-REFUND_WINDOW = 604800        # возврат — 7 дней
+PLAY_REMIND_COOLDOWN = 7200
+REFUND_WINDOW = 604800
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "stars": 50, "desc": "+100 монет сразу"},
@@ -132,7 +132,7 @@ def is_vip(cat):
 
 
 def bonus_available(cat):
-    return int(time.time()) - cat[9 + 1] >= DAILY_COOLDOWN
+    return int(time.time()) - cat[10] >= DAILY_COOLDOWN
 
 
 def render(cat):
@@ -220,9 +220,9 @@ HELP_TEXT = (
     "/start — начать\n"
     "/menu — меню\n"
     "/daily — бонус дня\n"
-    "/help — справка\n"
-    "/support — поддержка\n"
+    "/soon — что в разработке\n"
     "/terms — условия\n"
+    "/support — поддержка\n"
     "/paysupport — оплата\n"
     "/refund — вернуть звёзды\n"
     "/mute — отключить напоминания\n"
@@ -244,7 +244,7 @@ TERMS_TEXT = (
 
 SUPPORT_TEXT = (
     "🆘 <b>Поддержка</b>\n\n"
-    f"Написать админу: @{SUPPORT_USERNAME}\n\n"
+    f"Написать админу: @{CONTACT_USERNAME}\n\n"
     "По вопросам оплаты — /paysupport\n"
     "⏱ Отвечаем в течение 24 часов."
 )
@@ -255,7 +255,7 @@ PAYSUPPORT_TEXT = (
     "• Списание прошло, но товар не пришёл — напиши нам\n"
     "• Хочешь вернуть Stars — команда /refund (в течение 7 дней)\n"
     "• Двойное списание — вернём лишнее\n\n"
-    f"📧 Связь: @{SUPPORT_USERNAME}\n\n"
+    f"📧 Связь: @{CONTACT_USERNAME}\n\n"
     "⚠️ <b>Важно:</b> поддержка Telegram не помогает с покупками внутри ботов."
 )
 
@@ -342,7 +342,6 @@ async def _do_feed(user_id, target):
     cat = await get_cat(user_id)
     full = render(cat) + f"\n\n{txt}"
 
-    # Умные подсказки
     hints = []
     if bonus_available(cat):
         hints.append("🎁 <b>Бонус дня доступен! Жми «🎁 Бонус дня»</b>")
@@ -497,6 +496,22 @@ async def _show_soon(target):
         await target.answer()
 
 
+async def _show_support(target):
+    if isinstance(target, Message):
+        await target.answer(SUPPORT_TEXT, reply_markup=bottom_menu())
+    else:
+        await target.message.answer(SUPPORT_TEXT, reply_markup=bottom_menu())
+        await target.answer()
+
+
+async def _show_paysupport(target):
+    if isinstance(target, Message):
+        await target.answer(PAYSUPPORT_TEXT, reply_markup=bottom_menu())
+    else:
+        await target.message.answer(PAYSUPPORT_TEXT, reply_markup=bottom_menu())
+        await target.answer()
+
+
 async def _show_profile(target):
     user_id = target.from_user.id if isinstance(target, (Message, CallbackQuery)) else 0
     cat = await get_cat(user_id)
@@ -584,12 +599,12 @@ async def cmd_terms(msg: Message):
 
 @dp.message(Command("support"))
 async def cmd_support(msg: Message):
-    await msg.answer(SUPPORT_TEXT, reply_markup=bottom_menu())
+    await _show_support(msg)
 
 
 @dp.message(Command("paysupport"))
 async def cmd_paysupport(msg: Message):
-    await msg.answer(PAYSUPPORT_TEXT, reply_markup=bottom_menu())
+    await _show_paysupport(msg)
 
 
 @dp.message(Command("hide"))
@@ -638,7 +653,7 @@ async def cmd_refund(msg: Message):
             "• Возможно, ты ещё ничего не покупал\n"
             "• Или уже вернул\n"
             "• Если платил до обновления бота — платёж не сохранился\n\n"
-            "По вопросам: /paysupport",
+            f"По вопросам: @{CONTACT_USERNAME}",
             reply_markup=bottom_menu()
         )
 
@@ -741,12 +756,12 @@ async def cb_refund(cb: CallbackQuery):
             await cb.message.edit_text(
                 "❌ <b>Telegram не смог найти этот платёж</b>\n\n"
                 "Скорее всего платёж очень старый, или был оформлен до обновления бота.\n\n"
-                f"Напиши админу: @{SUPPORT_USERNAME}"
+                f"Напиши: @{CONTACT_USERNAME}"
             )
         else:
             await cb.message.edit_text(
                 f"❌ <b>Ошибка возврата</b>\n\n<code>{err}</code>\n\n"
-                f"Напиши админу: @{SUPPORT_USERNAME}"
+                f"Напиши: @{CONTACT_USERNAME}"
             )
     await cb.answer()
 
@@ -1095,7 +1110,6 @@ async def reminder_loop():
         try:
             now = int(time.time())
             day_ago = now - 86400
-            two_hours_ago = now - PLAY_REMIND_COOLDOWN
 
             async with aiosqlite.connect(DB) as db:
                 cur = await db.execute(
@@ -1109,9 +1123,7 @@ async def reminder_loop():
             for (user_id, name, last_seen, last_remind, last_daily,
                  last_play_remind, satiety, coins) in rows:
 
-                # Общее напоминание — не чаще 1 в день
                 send_general = (not last_remind) or (now - last_remind >= REMIND_COOLDOWN)
-                # Отдельное напоминание «поиграть» — не чаще 1 в 2 часа
                 send_play = (not last_play_remind) or (now - last_play_remind >= PLAY_REMIND_COOLDOWN)
 
                 days = (now - last_seen) // 86400
@@ -1119,7 +1131,6 @@ async def reminder_loop():
                 can_play = satiety >= 10 and coins >= 20
 
                 if send_general and days >= 1:
-                    # ОСНОВНОЕ напоминание
                     parts = []
                     if days >= 7:
                         parts.append(
@@ -1182,7 +1193,6 @@ async def reminder_loop():
                             except Exception:
                                 pass
                 elif send_play and can_play and days < 1:
-                    # ДОПОЛНИТЕЛЬНОЕ напоминание про игру (только если юзер активен)
                     try:
                         await bot.send_message(
                             user_id,
