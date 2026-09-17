@@ -2,18 +2,19 @@ import asyncio
 import aiosqlite
 import time
 import random
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     LabeledPrice, PreCheckoutQuery, BotCommand, BotCommandScopeDefault,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, TelegramObject
 )
 from aiogram.client.default import DefaultBotProperties
 
 # ==== НАСТРОЙКИ ====
 BOT_TOKEN = "8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY"
 ADMIN_ID = 5965370780
+SUPPORT_USERNAME = "artemizmailov"   # ← замени на свой юзернейм (без @)
 # ===================
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -21,6 +22,8 @@ dp = Dispatcher()
 
 DB = "cat.db"
 FEED_COOLDOWN = 30
+DAILY_COOLDOWN = 86400
+REMIND_COOLDOWN = 86400
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "stars": 50, "desc": "+100 монет сразу"},
@@ -31,9 +34,11 @@ SHOP = {
 active_games = {}
 
 
-# ---------- БД ----------
+# ==================== БАЗА ДАННЫХ ====================
 async def init_db():
     async with aiosqlite.connect(DB) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cats (
                 user_id INTEGER PRIMARY KEY,
@@ -49,6 +54,22 @@ async def init_db():
                 streak INTEGER DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                item_key TEXT,
+                stars INTEGER,
+                charge_id TEXT,
+                created_at INTEGER
+            )
+        """)
+        # миграции колонок
+        for col, default in [("last_seen", "0"), ("last_remind", "0")]:
+            try:
+                await db.execute(f"ALTER TABLE cats ADD COLUMN {col} INTEGER DEFAULT {default}")
+            except Exception:
+                pass
         await db.commit()
 
 
@@ -74,6 +95,7 @@ async def update_cat(user_id, **fields):
         await db.commit()
 
 
+# ==================== ЛОГИКА ====================
 def xp_for_next(level):
     return level * 100
 
@@ -115,7 +137,7 @@ def render(cat):
     )
 
 
-# ---------- Клавиатуры ----------
+# ==================== КЛАВИАТУРЫ ====================
 def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍖 Покормить", callback_data="feed"),
@@ -151,7 +173,7 @@ def bottom_menu():
     )
 
 
-# ---------- Тексты ----------
+# ==================== ТЕКСТЫ ====================
 BONUS_SOON_TEXT = (
     "🎁 <b>Бонус дня — в разработке</b>\n\n"
     "Эта функция скоро будет доступна.\n"
@@ -160,38 +182,97 @@ BONUS_SOON_TEXT = (
     "🐾 <i>Спасибо, что играешь с нами.</i>"
 )
 
-
 HELP_TEXT = (
     "❓ <b>Что делает этот бот?</b>\n\n"
-
     "🐱 <b>Это игра-тамагочи про котика.</b>\n"
-    "Ты заводишь своего питомца, кормишь его, играешь с ним,\n"
-    "качаешь уровень и зарабатываешь монеты.\n\n"
-
-    "<b>🎮 Что можно делать:</b>\n"
-    "🍖 <b>Покормить</b> — раз в 30 сек даёт монеты\n"
-    "🎾 <b>Поиграть</b> — тратит сытость, даёт монеты и опыт\n"
-    "🎲 <b>Угадай число</b> — мини-игра, угадай 1–10, ставка 20 монет,\n"
-    "     угадал — <b>+100 монет</b>\n"
-    "🛒 <b>Магазин</b> — покупки за ⭐ Telegram Stars\n"
-    "👤 <b>Профиль</b> — посмотреть своего котика\n\n"
-
-    "<b>💎 Что продаётся в магазине:</b>\n"
-    "🍖 Корм x10 — 50 ⭐ → +100 монет\n"
-    "⚡ Ускоритель x2 на 24ч — 100 ⭐ → двойные монеты\n"
-    "👑 VIP-котик — 250 ⭐ → скин + +10 монет каждый час\n\n"
-
+    "Заводишь питомца, кормишь, играешь, качаешь уровень и зарабатываешь монеты.\n\n"
+    "<b>🎮 Кнопки внизу:</b>\n"
+    "🍖 Покормить — +монеты (раз в 30 сек)\n"
+    "🎾 Поиграть — +XP и монеты\n"
+    "🎲 Угадай — мини-игра на монеты\n"
+    "🎁 Бонус дня — скоро\n"
+    "🛒 Магазин — покупки за ⭐ Stars\n"
+    "👤 Профиль — твой котик\n\n"
     "<b>📋 Команды:</b>\n"
     "/start — начать\n"
-    "/menu  — показать меню\n"
-    "/help  — эта справка\n"
-    "/hide  — скрыть меню\n\n"
+    "/menu — показать меню\n"
+    "/help — эта справка\n"
+    "/support — поддержка\n"
+    "/terms — условия\n"
+    "/mute — отключить напоминания\n"
+    "/unmute — включить напоминания\n"
+    "/hide — скрыть меню\n\n"
+    "👑 <b>VIP</b> — +10 монет каждый час"
+)
 
-    "Приятной игры 🐾"
+TERMS_TEXT = (
+    "📜 <b>Условия использования</b>\n\n"
+    "1. Это игра-тамагочи. Все покупки — цифровые товары.\n"
+    "2. Монеты и бонусы внутри игры не имеют денежной ценности\n"
+    "   и не подлежат обмену на реальные деньги.\n"
+    "3. Возврат средств за Stars возможен через /paysupport\n"
+    "   в течение 24 часов после покупки.\n"
+    "4. Игра предоставляется «как есть».\n"
+    "5. Мы оставляем право менять условия.\n\n"
+    "Используя бота, вы соглашаетесь с этими условиями."
+)
+
+SUPPORT_TEXT = (
+    "🆘 <b>Поддержка</b>\n\n"
+    f"Написать админу: @{SUPPORT_USERNAME}\n\n"
+    "По вопросам оплаты — /paysupport\n"
+    "⏱ Отвечаем в течение 24 часов."
+)
+
+PAYSUPPORT_TEXT = (
+    "💳 <b>Поддержка по оплате</b>\n\n"
+    "Если проблема с оплатой:\n"
+    "• Списание прошло, но товар не пришёл — напиши нам\n"
+    "• Хочешь вернуть Stars — можно в течение 24ч\n"
+    "• Двойное списание — вернём лишнее\n\n"
+    f"📧 Связь: @{SUPPORT_USERNAME}\n\n"
+    "⚠️ <b>Важно:</b> поддержка Telegram не помогает с покупками внутри ботов."
 )
 
 
-# ---------- Действия ----------
+# ==================== MIDDLEWARE ====================
+class SeenMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = data.get("event_from_user")
+        if user:
+            try:
+                async with aiosqlite.connect(DB) as db:
+                    await db.execute(
+                        "UPDATE cats SET last_seen=? WHERE user_id=?",
+                        (int(time.time()), user.id)
+                    )
+                    await db.commit()
+            except Exception:
+                pass
+        return await handler(event, data)
+
+
+# ==================== ДЕЙСТВИЯ ====================
+async def _animate(target, frames, delay=0.4):
+    """Плавная анимация через редактирование сообщения."""
+    msg = None
+    if isinstance(target, CallbackQuery):
+        msg = target.message
+    elif isinstance(target, Message):
+        msg = await target.answer(frames[0])
+
+    if msg is None:
+        return None
+
+    for frame in frames[1:]:
+        try:
+            await msg.edit_text(frame)
+        except Exception:
+            pass
+        await asyncio.sleep(delay)
+    return msg
+
+
 async def _do_feed(user_id, target):
     cat = await get_cat(user_id)
     now = int(time.time())
@@ -201,6 +282,14 @@ async def _do_feed(user_id, target):
         if isinstance(target, Message):
             return await target.answer(msg_text)
         return await target.answer(msg_text, show_alert=False)
+
+    # АНИМАЦИЯ
+    anim = await _animate(target, [
+        "🍖 Кормим котика.",
+        "🍖 Кормим котика..",
+        "🍖 Кормим котика...",
+        "😋 Котик кушает...",
+    ])
 
     coins_gain = random.randint(5, 15)
     if is_boost(cat): coins_gain *= 2
@@ -213,13 +302,15 @@ async def _do_feed(user_id, target):
     if leveled: txt += f"\n🎉 Новый уровень: <b>{level}</b>!"
     cat = await get_cat(user_id)
     full = render(cat) + f"\n\n{txt}"
-    if isinstance(target, Message):
-        await target.answer(full, reply_markup=bottom_menu())
-    else:
+
+    if anim:
         try:
-            await target.message.edit_text(full, reply_markup=main_kb())
+            await anim.edit_text(full, reply_markup=main_kb())
         except Exception:
-            await target.message.answer(full)
+            await anim.edit_text(full)
+    elif isinstance(target, Message):
+        await target.answer(full, reply_markup=bottom_menu())
+    if isinstance(target, CallbackQuery):
         await target.answer()
 
 
@@ -231,6 +322,13 @@ async def _do_play(user_id, target):
             return await target.answer(msg_text)
         return await target.answer(msg_text, show_alert=True)
 
+    anim = await _animate(target, [
+        "🎾 Играем с котиком.",
+        "🎾 Играем с котиком..",
+        "🎾 Играем с котиком...",
+        "😺 Котик веселится!",
+    ])
+
     coins_gain = random.randint(10, 25)
     if is_boost(cat): coins_gain *= 2
     await update_cat(user_id, coins=cat[4] + coins_gain, satiety=max(0, cat[5] - 10))
@@ -240,13 +338,15 @@ async def _do_play(user_id, target):
     if leveled: txt += f"\n🎉 Новый уровень: <b>{level}</b>!"
     cat = await get_cat(user_id)
     full = render(cat) + f"\n\n{txt}"
-    if isinstance(target, Message):
-        await target.answer(full, reply_markup=bottom_menu())
-    else:
+
+    if anim:
         try:
-            await target.message.edit_text(full, reply_markup=main_kb())
+            await anim.edit_text(full, reply_markup=main_kb())
         except Exception:
-            await target.message.answer(full)
+            await anim.edit_text(full)
+    elif isinstance(target, Message):
+        await target.answer(full, reply_markup=bottom_menu())
+    if isinstance(target, CallbackQuery):
         await target.answer()
 
 
@@ -264,7 +364,7 @@ async def _show_shop(target):
         await target.answer()
 
 
-async def _show_bonus_soon(target):
+async def _show_soon(target):
     if isinstance(target, Message):
         await target.answer(BONUS_SOON_TEXT, reply_markup=bottom_menu())
     else:
@@ -304,7 +404,7 @@ async def _start_guess(user_id, target):
         await target.answer()
 
 
-# ---------- Команды ----------
+# ==================== КОМАНДЫ ====================
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     cat = await get_cat(msg.from_user.id)
@@ -313,8 +413,7 @@ async def cmd_start(msg: Message):
         "Корми, играй, качай уровень.\n"
         "За <b>Telegram Stars</b> покупай бонусы в магазине.\n\n"
         "📌 Кнопки внизу — главное меню.\n"
-        "📌 Нажми <b>❌ Скрыть меню</b> — свернёшь клавиатуру.\n"
-        "📌 Или введи /menu — вернуть.\n\n"
+        "📌 /help — справка, /menu — меню.\n\n"
         + render(cat),
         reply_markup=bottom_menu()
     )
@@ -331,13 +430,100 @@ async def cmd_help(msg: Message):
     await _show_help(msg)
 
 
+@dp.message(Command("terms"))
+async def cmd_terms(msg: Message):
+    await msg.answer(TERMS_TEXT, reply_markup=bottom_menu())
+
+
+@dp.message(Command("support"))
+async def cmd_support(msg: Message):
+    await msg.answer(SUPPORT_TEXT, reply_markup=bottom_menu())
+
+
+@dp.message(Command("paysupport"))
+async def cmd_paysupport(msg: Message):
+    await msg.answer(PAYSUPPORT_TEXT, reply_markup=bottom_menu())
+
+
 @dp.message(Command("hide"))
 async def cmd_hide(msg: Message):
     await msg.answer("Меню свёрнуто. Введи /menu чтобы вернуть.",
                      reply_markup=ReplyKeyboardRemove())
 
 
-# ---------- Кнопки внизу ----------
+@dp.message(Command("mute"))
+async def cmd_mute(msg: Message):
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE cats SET last_remind=9999999999 WHERE user_id=?",
+                         (msg.from_user.id,))
+        await db.commit()
+    await msg.answer(
+        "🔕 <b>Напоминания отключены</b>\n\n"
+        "Бот больше не будет тебе писать.\n"
+        "Включить обратно: /unmute",
+        reply_markup=bottom_menu()
+    )
+
+
+@dp.message(Command("unmute"))
+async def cmd_unmute(msg: Message):
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE cats SET last_remind=0 WHERE user_id=?",
+                         (msg.from_user.id,))
+        await db.commit()
+    await msg.answer(
+        "🔔 <b>Напоминания включены</b>\n\n"
+        "Бот будет напоминать, если ты давно не заходил.",
+        reply_markup=bottom_menu()
+    )
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(msg: Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    try:
+        async with aiosqlite.connect(DB) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM cats")
+            total = (await cur.fetchone())[0]
+
+            cur = await db.execute("SELECT COUNT(*) FROM cats WHERE last_seen > ?",
+                                   (int(time.time()) - 86400,))
+            active_day = (await cur.fetchone())[0]
+
+            cur = await db.execute("SELECT COUNT(*) FROM cats WHERE last_seen > ?",
+                                   (int(time.time()) - 604800,))
+            active_week = (await cur.fetchone())[0]
+
+            cur = await db.execute("SELECT COUNT(*) FROM cats WHERE vip=1")
+            vips = (await cur.fetchone())[0]
+
+            cur = await db.execute("SELECT SUM(coins) FROM cats")
+            total_coins = (await cur.fetchone())[0] or 0
+
+            cur = await db.execute("SELECT AVG(level) FROM cats")
+            avg_level = (await cur.fetchone())[0] or 0
+
+            cur = await db.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments")
+            row = await cur.fetchone()
+            buys, total_stars = row if row else (0, 0)
+
+        await msg.answer(
+            f"📊 <b>Статистика бота</b>\n\n"
+            f"👥 Всего юзеров: <b>{total}</b>\n"
+            f"📅 Активных за 24ч: <b>{active_day}</b>\n"
+            f"📆 Активных за 7д: <b>{active_week}</b>\n"
+            f"👑 VIP-юзеров: <b>{vips}</b>\n\n"
+            f"💰 Монет у всех: <b>{total_coins}</b>\n"
+            f"📈 Средний уровень: <b>{avg_level:.1f}</b>\n\n"
+            f"🛒 Покупок: <b>{buys}</b>\n"
+            f"⭐ Звёзд получено: <b>{total_stars}</b>"
+        )
+    except Exception as e:
+        await msg.answer(f"Ошибка: <code>{e}</code>")
+
+
+# ==================== КНОПКИ ВНИЗУ ====================
 @dp.message(F.text == "🍖 Покормить")
 async def btn_feed(msg: Message):
     await _do_feed(msg.from_user.id, msg)
@@ -355,7 +541,7 @@ async def btn_guess(msg: Message):
 
 @dp.message(F.text == "🎁 Бонус дня")
 async def btn_daily(msg: Message):
-    await _show_bonus_soon(msg)
+    await _show_soon(msg)
 
 
 @dp.message(F.text == "🛒 Магазин")
@@ -382,7 +568,7 @@ async def btn_hide(msg: Message):
     )
 
 
-# ---------- Угадай число ----------
+# ==================== УГАДАЙ ЧИСЛО ====================
 @dp.message(F.text.regexp(r"^\d+$"))
 async def guess_handler(msg: Message):
     user_id = msg.from_user.id
@@ -428,7 +614,7 @@ async def guess_handler(msg: Message):
             )
 
 
-# ---------- Инлайн-кнопки ----------
+# ==================== ИНЛАЙН-КНОПКИ ====================
 @dp.callback_query(F.data == "refresh")
 async def cb_refresh(cb: CallbackQuery):
     cat = await get_cat(cb.from_user.id)
@@ -451,7 +637,7 @@ async def cb_play(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "daily")
 async def cb_daily(cb: CallbackQuery):
-    await _show_bonus_soon(cb)
+    await _show_soon(cb)
 
 
 @dp.callback_query(F.data == "guess")
@@ -462,6 +648,19 @@ async def cb_guess(cb: CallbackQuery):
 @dp.callback_query(F.data == "shop")
 async def cb_shop(cb: CallbackQuery):
     await _show_shop(cb)
+
+
+@dp.callback_query(F.data == "mute")
+async def cb_mute(cb: CallbackQuery):
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE cats SET last_remind=9999999999 WHERE user_id=?",
+                         (cb.from_user.id,))
+        await db.commit()
+    try:
+        await cb.message.edit_text("🔕 Напоминания отключены.\nВключить: /unmute")
+    except Exception:
+        pass
+    await cb.answer()
 
 
 @dp.callback_query(F.data.startswith("buy:"))
@@ -481,7 +680,7 @@ async def cb_buy(cb: CallbackQuery):
     await cb.answer()
 
 
-# ---------- Оплата ----------
+# ==================== ОПЛАТА ====================
 @dp.pre_checkout_query()
 async def pre_checkout(q: PreCheckoutQuery):
     await q.answer(ok=True)
@@ -493,6 +692,21 @@ async def on_paid(msg: Message):
     key = payload.split(":")[1]
     user_id = msg.from_user.id
     cat = await get_cat(user_id)
+
+    stars = msg.successful_payment.total_amount
+    charge_id = msg.successful_payment.telegram_payment_charge_id
+
+    # сохраняем платёж
+    try:
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                "INSERT INTO payments(user_id, item_key, stars, charge_id, created_at) "
+                "VALUES(?,?,?,?,?)",
+                (user_id, key, stars, charge_id, int(time.time()))
+            )
+            await db.commit()
+    except Exception:
+        pass
 
     if key == "food10":
         await update_cat(user_id, coins=cat[4] + 100)
@@ -513,36 +727,125 @@ async def on_paid(msg: Message):
         try:
             await bot.send_message(
                 ADMIN_ID,
-                f"💰 {msg.from_user.full_name} купил <b>{key}</b> за "
-                f"{msg.successful_payment.total_amount} ⭐"
+                f"💰 <b>Новая покупка!</b>\n\n"
+                f"👤 {msg.from_user.full_name} (@{msg.from_user.username})\n"
+                f"🆔 <code>{user_id}</code>\n"
+                f"📦 Товар: <b>{key}</b>\n"
+                f"⭐ Сумма: <b>{stars} Stars</b>\n"
+                f"🧾 Charge: <code>{charge_id}</code>"
             )
         except Exception:
             pass
 
 
-# ---------- Фон ----------
+# ==================== ФОНОВЫЕ ЗАДАЧИ ====================
 async def vip_income_loop():
     while True:
-        async with aiosqlite.connect(DB) as db:
-            await db.execute("UPDATE cats SET coins = coins + 10 WHERE vip=1")
-            await db.commit()
+        try:
+            async with aiosqlite.connect(DB) as db:
+                await db.execute("UPDATE cats SET coins = coins + 10 WHERE vip=1")
+                await db.commit()
+        except Exception as e:
+            print(f"vip_income_loop ошибка: {e}")
+        await asyncio.sleep(3600)
+
+
+async def reminder_loop():
+    await asyncio.sleep(60)  # подождём, пока бот стартует
+    while True:
+        try:
+            now = int(time.time())
+            day_ago = now - 86400
+
+            async with aiosqlite.connect(DB) as db:
+                cur = await db.execute(
+                    "SELECT user_id, name, last_seen, last_remind FROM cats "
+                    "WHERE last_seen < ? AND last_seen > 0",
+                    (day_ago,)
+                )
+                rows = await cur.fetchall()
+
+            for user_id, name, last_seen, last_remind in rows:
+                if last_remind and now - last_remind < REMIND_COOLDOWN:
+                    continue
+
+                days = (now - last_seen) // 86400
+
+                if days >= 7:
+                    text = (
+                        f"🐱 <b>Твой котик {name} очень скучает!</b>\n\n"
+                        f"Ты не заходил уже <b>{days} дней</b>. "
+                        f"Он голодный и грустный 😿\n\n"
+                        f"Зайди, покорми его! 🍖"
+                    )
+                elif days >= 3:
+                    text = (
+                        f"🐱 <b>{name} скучает по тебе</b>\n\n"
+                        f"Ты не заходил <b>{days} дня</b>. Котик хочет есть 🍖"
+                    )
+                elif days >= 1:
+                    text = f"🐱 <b>{name} проголодался!</b>\n\nПокорми его — он ждёт 🍖"
+                else:
+                    continue
+
+                try:
+                    await bot.send_message(
+                        user_id, text,
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🍖 Покормить", callback_data="feed")],
+                            [InlineKeyboardButton(text="🔕 Не напоминать", callback_data="mute")]
+                        ])
+                    )
+                    async with aiosqlite.connect(DB) as db:
+                        await db.execute(
+                            "UPDATE cats SET last_remind=? WHERE user_id=?",
+                            (now, user_id)
+                        )
+                        await db.commit()
+                except Exception as e:
+                    print(f"Напоминание {user_id} не прошло: {e}")
+                    if "blocked" in str(e).lower():
+                        try:
+                            async with aiosqlite.connect(DB) as db:
+                                await db.execute(
+                                    "UPDATE cats SET last_remind=9999999999 WHERE user_id=?",
+                                    (user_id,)
+                                )
+                                await db.commit()
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"reminder_loop ошибка: {e}")
+
         await asyncio.sleep(3600)
 
 
 async def setup_commands():
     commands = [
-        BotCommand(command="start", description="🐱 Запустить"),
-        BotCommand(command="menu",  description="📋 Меню"),
-        BotCommand(command="hide",  description="❌ Скрыть меню"),
-        BotCommand(command="help",  description="❓ Помощь"),
+        BotCommand(command="start",      description="🐱 Запустить"),
+        BotCommand(command="menu",       description="📋 Меню"),
+        BotCommand(command="help",       description="❓ Помощь"),
+        BotCommand(command="support",    description="🆘 Поддержка"),
+        BotCommand(command="paysupport", description="💳 Оплата"),
+        BotCommand(command="terms",      description="📜 Условия"),
+        BotCommand(command="mute",       description="🔕 Отключить напоминания"),
+        BotCommand(command="unmute",     description="🔔 Включить напоминания"),
+        BotCommand(command="hide",       description="❌ Скрыть меню"),
     ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    try:
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    except Exception as e:
+        print(f"setup_commands ошибка: {e}")
 
 
+# ==================== ЗАПУСК ====================
 async def main():
     await init_db()
     await setup_commands()
+    dp.message.middleware(SeenMiddleware())
+    dp.callback_query.middleware(SeenMiddleware())
     asyncio.create_task(vip_income_loop())
+    asyncio.create_task(reminder_loop())
     print("Бот запущен...")
     await dp.start_polling(bot)
 
