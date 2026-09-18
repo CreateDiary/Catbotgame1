@@ -33,6 +33,7 @@ NAME_MIN_LEN = 2
 COMPLAINT_COOLDOWN = 3600
 REFUND_WINDOW = 1814400
 NOTICE_COOLDOWN = 300
+BROADCAST_COOLDOWN = 3600
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "coins": 200, "desc": "+100 монет сразу"},
@@ -121,6 +122,7 @@ banned_users = {}
 awaiting_name = {}
 awaiting_complaint = {}
 notice_times = {}
+broadcast_times = {}
 
 
 async def init_db():
@@ -731,6 +733,56 @@ async def cmd_notice(msg: Message):
         return
     await log_admin_action(msg.from_user.id, "notice")
     await msg.answer(SHORT_NOTICE)
+
+
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    parts = msg.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return await msg.answer(
+            "📢 <b>Рассылка</b>\n\n"
+            "Использование:\n"
+            "<code>/broadcast текст объявления</code>\n\n"
+            "Пример:\n"
+            "<code>/broadcast Завтра обновление!</code>"
+        )
+    text = parts[1].strip()
+    if len(text) > 3000:
+        return await msg.answer("❌ Слишком длинное сообщение. Максимум 3000 символов.")
+    now = int(time.time())
+    last = broadcast_times.get(msg.from_user.id, 0)
+    if now - last < BROADCAST_COOLDOWN:
+        left = BROADCAST_COOLDOWN - (now - last)
+        m = left // 60
+        return await msg.answer(f"⏰ Рассылку можно раз в час. Осталось: <b>{m} мин</b>")
+    await msg.answer("📢 Начинаю рассылку...")
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT user_id FROM cats")
+        rows = await cur.fetchall()
+    total = len(rows)
+    sent = 0
+    failed = 0
+    broadcast_text = f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{text}"
+    for (user_id,) in rows:
+        if is_banned(user_id):
+            failed += 1
+            continue
+        try:
+            await bot.send_message(user_id, broadcast_text)
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+    broadcast_times[msg.from_user.id] = now
+    await log_admin_action(msg.from_user.id, "broadcast", details=text[:100])
+    await msg.answer(
+        f"✅ <b>Рассылка завершена</b>\n\n"
+        f"📨 Всего: <b>{total}</b>\n"
+        f"✅ Доставлено: <b>{sent}</b>\n"
+        f"❌ Не дошло: <b>{failed}</b>"
+    )
 
 
 @dp.message(Command("complaint"))
