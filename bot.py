@@ -2,6 +2,7 @@ import asyncio
 import aiosqlite
 import time
 import random
+import os
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.types import (
@@ -29,6 +30,8 @@ WARN_COOLDOWN = 300
 NAME_COOLDOWN = 86400
 NAME_MAX_LEN = 20
 NAME_MIN_LEN = 2
+COMPLAINT_COOLDOWN = 3600
+REFUND_WINDOW = 1814400
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "coins": 200, "desc": "+100 монет сразу"},
@@ -57,20 +60,45 @@ SKINS = {
 }
 
 ANNOUNCE_TEXT = (
-    "⚠️ <b>ВАЖНОЕ ОБЪЯВЛЕНИЕ</b>\n\n"
-    "Бот может <b>временно отключиться</b> в течение ближайших <b>5 дней</b>.\n\n"
-    "📅 <b>Когда:</b> в течение 5 дней\n"
-    "⏱ <b>На сколько:</b> от 2 часов до 2 дней\n"
-    "❓ <b>Почему:</b> перегрузка сервера, нужно обновить мощности\n\n"
-    "✅ <b>Что сохранится:</b>\n"
-    "• Монеты 💰\n"
-    "• Уровни 📊\n"
-    "• Скины 🎨\n"
-    "• VIP 👑\n"
-    "• Стрики 🔥\n\n"
-    "Все данные <b>сохранятся!</b>\n\n"
-    "📌 Следите за обновлениями.\n"
-    "🐾 <i>Спасибо за понимание!</i>"
+    "╔══════════════════════╗\n"
+    "      ⚠️ <b>ВАЖНОЕ ОБЪЯВЛЕНИЕ</b> ⚠️\n"
+    "╚══════════════════════╝\n\n"
+    "🐱 <b>Дорогие игроки!</b>\n\n"
+    "Скоро нас ждёт <b>большое обновление</b>.\n"
+    "Бот временно уйдёт на технические работы.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "📅 <b>КОГДА:</b>\n"
+    "   В течение <b>5 дней</b>\n\n"
+    "⏱ <b>НА СКОЛЬКО:</b>\n"
+    "   От <b>2 часов</b> до <b>2 дней</b>\n\n"
+    "❓ <b>ПОЧЕМУ:</b>\n"
+    "   • Перегрузка сервера\n"
+    "   • Обновление мощностей\n"
+    "   • Улучшение стабильности\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 <b>ВАЖНО ПРО ОПЛАТУ</b>\n\n"
+    "Если ты <b>покупал за ⭐ Stars</b> —\n"
+    "мы <b>вернём тебе звёзды</b>! 💸\n\n"
+    "👉 Нажми /refund или кнопку ниже\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "✅ <b>ЧТО СОХРАНИТСЯ:</b>\n\n"
+    "   💰 Монеты — останутся\n"
+    "   📊 Уровни — останутся\n"
+    "   🎨 Скины — останутся\n"
+    "   👑 VIP — останется\n"
+    "   🔥 Стрики — останутся\n"
+    "   🏆 Прогресс — останется\n\n"
+    "<b>НИЧЕГО НЕ ПОТЕРЯЕТСЯ!</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📌 <b>Что делать:</b>\n"
+    "   • Не паникуй\n"
+    "   • Играй как обычно\n"
+    "   • Следи за обновлениями\n\n"
+    "После возвращения — <b>просто зайди в бота</b>,\n"
+    "всё будет на месте 🐾\n\n"
+    "╔══════════════════════╗\n"
+    "   🐾 <i>Спасибо за понимание!</i>\n"
+    "╚══════════════════════╝"
 )
 
 active_games = {}
@@ -78,15 +106,18 @@ warned_users = {}
 spam_tracker = {}
 banned_users = {}
 awaiting_name = {}
+awaiting_complaint = {}
 
 
 async def init_db():
     async with aiosqlite.connect(DB) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
-        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0, last_complaint INTEGER DEFAULT 0)")
         await db.execute("CREATE TABLE IF NOT EXISTS user_skins (user_id INTEGER, skin_key TEXT, purchased_at INTEGER, PRIMARY KEY (user_id, skin_key))")
         await db.execute("CREATE TABLE IF NOT EXISTS admin_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, action TEXT, target_id INTEGER, details TEXT, created_at INTEGER)")
+        await db.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_key TEXT, stars INTEGER, charge_id TEXT, created_at INTEGER, refunded INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE IF NOT EXISTS complaints (id INTEGER PRIMARY KEY AUTOINCREMENT, from_user_id INTEGER, reported_user TEXT, reason TEXT, created_at INTEGER, processed INTEGER DEFAULT 0)")
         await db.commit()
 
 
@@ -182,13 +213,6 @@ async def auto_ban(user_id):
             await bot.send_message(admin, f"🚫 Автобан: <code>{user_id}</code>")
         except Exception:
             pass
-
-
-async def show_announce(chat_id):
-    try:
-        await bot.send_message(chat_id, ANNOUNCE_TEXT)
-    except Exception:
-        pass
 
 
 class AntiSpamMiddleware(BaseMiddleware):
@@ -288,6 +312,7 @@ def main_kb():
         [InlineKeyboardButton(text="🎲 Угадай число", callback_data="guess"), InlineKeyboardButton(text="🎁 Бонус дня", callback_data="daily")],
         [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop"), InlineKeyboardButton(text="🎨 Скины", callback_data="skins_menu")],
         [InlineKeyboardButton(text="✏️ Имя", callback_data="rename"), InlineKeyboardButton(text="🚧 Скоро", callback_data="soon")],
+        [InlineKeyboardButton(text="💸 Вернуть звёзды", callback_data="refund_menu")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh")],
     ])
 
@@ -317,9 +342,24 @@ def profile_kb():
         [InlineKeyboardButton(text="✏️ Изменить имя", callback_data="rename")],
         [InlineKeyboardButton(text="🎨 Скины", callback_data="skins_menu")],
         [InlineKeyboardButton(text="🚧 Что скоро", callback_data="soon")],
-        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="notif_settings")],
-        [InlineKeyboardButton(text="🚨 Пожаловаться", callback_data="report")],
+        [InlineKeyboardButton(text="🚨 Пожаловаться", callback_data="complaint")],
+        [InlineKeyboardButton(text="💸 Вернуть звёзды", callback_data="refund_menu")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh")],
+    ])
+
+
+def complaint_confirm_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="complaint_send")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="complaint_cancel")],
+    ])
+
+
+def complaint_admin_kb(cid):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Обработать", callback_data=f"cmp_done:{cid}")],
+        [InlineKeyboardButton(text="🚫 Забанить", callback_data=f"cmp_ban:{cid}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"cmp_reject:{cid}")],
     ])
 
 
@@ -338,15 +378,19 @@ def bottom_menu():
     )
 
 
-HELP_TEXT = "❓ <b>Что делает этот бот?</b>\n\n🐱 <b>Игра-тамагочи про котика.</b>\nКорми, играй, качай уровень, покупай скины за монеты, меняй имя.\n\n<b>🎮 Кнопки внизу:</b>\n🍖 Покормить — +монеты\n🎾 Поиграть — +XP и монеты\n🎲 Угадай — мини-игра\n🎁 Бонус дня — раз в 24ч\n🛒 Магазин — за монеты\n🎨 Скины — за монеты\n👤 Профиль — твой котик\n✏️ Имя — сменить имя\n🚧 Скоро — будущие фичи\n🚨 Жалоба — на юзера\n\n<b>📋 Команды:</b>\n/start, /menu, /daily, /soon, /help\n/support, /report, /terms, /mute, /unmute, /hide\n\n📷 Фото, видео, стикеры, текст удаляются.\n⚠️ Спам = <b>бан 24 часа</b>."
+HELP_TEXT = "❓ <b>Что делает этот бот?</b>\n\n🐱 <b>Игра-тамагочи про котика.</b>\nКорми, играй, качай уровень, покупай скины за монеты, меняй имя.\n\n<b>🎮 Кнопки внизу:</b>\n🍖 Покормить — +монеты\n🎾 Поиграть — +XP и монеты\n🎲 Угадай — мини-игра\n🎁 Бонус дня — раз в 24ч\n🛒 Магазин — за монеты\n🎨 Скины — за монеты\n👤 Профиль — твой котик\n✏️ Имя — сменить имя\n🚧 Скоро — будущие фичи\n🚨 Жалоба — на юзера\n\n<b>📋 Команды:</b>\n/start, /menu, /daily, /soon, /help\n/complaint — пожаловаться\n/refund — вернуть звёзды\n/report, /terms, /mute, /unmute, /hide\n\n📷 Фото, видео, стикеры, текст удаляются.\n⚠️ Спам = <b>бан 24 часа</b>."
 
-TERMS_TEXT = "📜 <b>Условия использования</b>\n\n1. Это игра-тамагочи.\n2. Монеты не имеют денежной ценности.\n3. Игра «как есть».\n4. Спам запрещён — <b>бан 24 часа</b>.\n5. Право менять условия."
+TERMS_TEXT = "📜 <b>Условия использования</b>\n\n1. Это игра-тамагочи.\n2. Монеты не имеют денежной ценности.\n3. Возврат Stars — /refund, до 21 дня.\n4. Игра «как есть».\n5. Спам запрещён — <b>бан 24 часа</b>.\n6. Право менять условия."
 
 SUPPORT_TEXT = f"🆘 <b>Поддержка</b>\n\nНаписать админу: @{CONTACT_USERNAME}\n\n⏱ Отвечаем в течение 24 часов."
 
 SOON_TEXT = "🚧 <b>Что готовится в боте</b>\n\n🏆 <b>Топ игроков</b> — рейтинг\n🤝 <b>Рефералка</b> — зови друзей\n🎁 <b>Ежедневные задания</b>\n🎉 <b>Ивенты</b> — праздники\n⚔️ <b>Дуэли котиков</b>\n🍀 <b>Лотерея</b>\n🎰 <b>Рулетка</b>\n🎣 <b>Рыбалка</b>\n🌱 <b>Огород</b>\n🎨 <b>Больше скинов</b>\n🎩 <b>Аксессуары</b>\n🏠 <b>Домики</b>\n🌟 <b>Эффекты</b>\n👨‍👩‍👧 <b>Семьи котиков</b>\n💌 <b>Подарки</b>\n🏅 <b>Достижения</b>\n\n🐾 <i>Следи за обновлениями!</i>"
 
 RENAME_TEXT = "✏️ <b>Смена имени котика</b>\n\nОтправь новое имя одним сообщением.\n\n📏 2-20 символов, можно эмодзи.\n⏰ 1 раз в 24 часа.\n\n❌ Отмена — /cancel"
+
+COMPLAINT_STEP1 = "🚨 <b>Жалоба</b>\n\n<b>Шаг 1/2:</b> На кого жалуешься?\n\nНапиши @username или ID юзера.\n\n❌ Отмена — /cancel"
+
+COMPLAINT_STEP2 = "🚨 <b>Жалоба</b>\n\n<b>Шаг 2/2:</b> Опиши проблему.\n\nЧто случилось? Опиши подробно.\n\n❌ Отмена — /cancel"
 
 
 async def _animate(target, frames, delay=0.4):
@@ -366,13 +410,7 @@ async def _animate(target, frames, delay=0.4):
     return msg
 
 
-async def _do_feed(user_id, target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _do_feed(user_id, target):
     cat = await get_cat(user_id)
     now = int(time.time())
     if now - cat[6] < FEED_COOLDOWN:
@@ -409,13 +447,7 @@ async def _do_feed(user_id, target, announce=False):
         await target.answer()
 
 
-async def _do_play(user_id, target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _do_play(user_id, target):
     cat = await get_cat(user_id)
     if cat[5] < 10:
         msg_text = "Котик слишком голодный 😿 Сначала покорми!"
@@ -449,13 +481,7 @@ async def _do_play(user_id, target, announce=False):
         await target.answer()
 
 
-async def _do_daily(user_id, target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _do_daily(user_id, target):
     cat = await get_cat(user_id)
     now = int(time.time())
     last = cat[9]
@@ -492,13 +518,7 @@ async def _do_daily(user_id, target, announce=False):
         await target.answer()
 
 
-async def _show_shop(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_shop(target):
     user_id = target.from_user.id if isinstance(target, (Message, CallbackQuery)) else 0
     cat = await get_cat(user_id)
     text = f"🛒 <b>Магазин за монеты</b>\n\n💰 У тебя: <b>{cat[4]} монет</b>\n\n"
@@ -515,13 +535,7 @@ async def _show_shop(target, announce=False):
         await target.answer()
 
 
-async def _show_skins(user_id, target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_skins(user_id, target):
     owned = await get_user_skins(user_id)
     owned = list(set(owned) | {"default", "cat", "black"})
     current = await get_current_skin(user_id)
@@ -539,13 +553,7 @@ async def _show_skins(user_id, target, announce=False):
         await target.answer()
 
 
-async def _show_help(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_help(target):
     if isinstance(target, Message):
         await target.answer(HELP_TEXT, reply_markup=bottom_menu())
     else:
@@ -553,13 +561,7 @@ async def _show_help(target, announce=False):
         await target.answer()
 
 
-async def _show_soon(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_soon(target):
     if isinstance(target, Message):
         await target.answer(SOON_TEXT, reply_markup=bottom_menu())
     else:
@@ -567,13 +569,7 @@ async def _show_soon(target, announce=False):
         await target.answer()
 
 
-async def _show_support(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_support(target):
     if isinstance(target, Message):
         await target.answer(SUPPORT_TEXT, reply_markup=bottom_menu())
     else:
@@ -581,13 +577,7 @@ async def _show_support(target, announce=False):
         await target.answer()
 
 
-async def _show_profile(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _show_profile(target):
     user_id = target.from_user.id if isinstance(target, (Message, CallbackQuery)) else 0
     text = "👤 <b>Профиль котика</b>\n\n" + await render_user(user_id)
     if isinstance(target, Message):
@@ -600,28 +590,7 @@ async def _show_profile(target, announce=False):
         await target.answer()
 
 
-async def _show_report(target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
-    text = f"🚨 <b>Пожаловаться</b>\n\nЕсли кто-то спамит, оскорбляет:\n\n👉 @{CONTACT_USERNAME}\n\n⚠️ Ложные жалобы = <b>бан</b>."
-    if isinstance(target, Message):
-        await target.answer(text, reply_markup=bottom_menu())
-    else:
-        await target.message.answer(text, reply_markup=bottom_menu())
-        await target.answer()
-
-
-async def _start_guess(user_id, target, announce=False):
-    if announce:
-        if isinstance(target, Message):
-            await show_announce(target.chat.id)
-        else:
-            await show_announce(target.message.chat.id)
-        await asyncio.sleep(0.5)
+async def _start_guess(user_id, target):
     cat = await get_cat(user_id)
     if cat[4] < 20:
         txt = "🎲 Нужно хотя бы 20 монет чтобы играть"
@@ -640,8 +609,8 @@ async def _start_guess(user_id, target, announce=False):
 
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
-    await show_announce(msg.chat.id)
-    await asyncio.sleep(0.5)
+    await bot.send_message(msg.chat.id, ANNOUNCE_TEXT)
+    await asyncio.sleep(1)
     cat = await get_cat(msg.from_user.id)
     text = "🐱 <b>Привет! Это твой котик.</b>\n\nКорми, играй, качай уровень.\nСкины — за монеты, имя — меняй!\n\n📌 Кнопки внизу — меню.\n\n" + await render_user(msg.from_user.id)
     if bonus_available(cat):
@@ -651,36 +620,36 @@ async def cmd_start(msg: Message):
 
 @dp.message(Command("menu"))
 async def cmd_menu(msg: Message):
-    await show_announce(msg.chat.id)
-    await asyncio.sleep(0.5)
+    await bot.send_message(msg.chat.id, ANNOUNCE_TEXT)
+    await asyncio.sleep(1)
     await msg.answer(await render_user(msg.from_user.id), reply_markup=bottom_menu())
 
 
 @dp.message(Command("help"))
 async def cmd_help(msg: Message):
-    await _show_help(msg, announce=True)
+    await _show_help(msg)
 
 
 @dp.message(Command("daily"))
 async def cmd_daily(msg: Message):
-    await _do_daily(msg.from_user.id, msg, announce=True)
+    await bot.send_message(msg.chat.id, ANNOUNCE_TEXT)
+    await asyncio.sleep(1)
+    await _do_daily(msg.from_user.id, msg)
 
 
 @dp.message(Command("soon"))
 async def cmd_soon(msg: Message):
-    await _show_soon(msg, announce=True)
+    await _show_soon(msg)
 
 
 @dp.message(Command("terms"))
 async def cmd_terms(msg: Message):
-    await show_announce(msg.chat.id)
-    await asyncio.sleep(0.5)
     await msg.answer(TERMS_TEXT, reply_markup=bottom_menu())
 
 
 @dp.message(Command("support"))
 async def cmd_support(msg: Message):
-    await _show_support(msg, announce=True)
+    await _show_support(msg)
 
 
 @dp.message(Command("hide"))
@@ -704,15 +673,12 @@ async def cmd_unmute(msg: Message):
     await msg.answer("🔔 <b>Напоминания включены</b>", reply_markup=bottom_menu())
 
 
-@dp.message(Command("report"))
-async def cmd_report(msg: Message):
-    await _show_report(msg, announce=True)
-
-
 @dp.message(Command("cancel"))
 async def cmd_cancel(msg: Message):
     if msg.from_user.id in awaiting_name:
         del awaiting_name[msg.from_user.id]
+    if msg.from_user.id in awaiting_complaint:
+        del awaiting_complaint[msg.from_user.id]
     await msg.answer("Отменено.", reply_markup=bottom_menu())
 
 
@@ -722,6 +688,116 @@ async def cmd_announce(msg: Message):
         return
     await log_admin_action(msg.from_user.id, "announce")
     await msg.answer(ANNOUNCE_TEXT)
+
+
+@dp.message(Command("complaint"))
+async def cmd_complaint(msg: Message):
+    await bot.send_message(msg.chat.id, ANNOUNCE_TEXT)
+    await asyncio.sleep(1)
+    await _start_complaint(msg.from_user.id, msg.chat.id)
+
+
+@dp.message(Command("complaints"))
+async def cmd_complaints(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT id, from_user_id, reported_user, reason, created_at FROM complaints WHERE processed=0 ORDER BY created_at DESC LIMIT 10")
+        rows = await cur.fetchall()
+    if not rows:
+        return await msg.answer("📭 Жалоб нет")
+    for cid, from_id, reported, reason, ts in rows:
+        ago = (int(time.time()) - ts) // 60
+        text = f"🚨 <b>Жалоба #{cid}</b>\n\n👤 От: <code>{from_id}</code>\n🎯 На: <b>{reported}</b>\n\n📝 {reason}\n\n⏱ {ago} мин назад"
+        try:
+            await msg.answer(text, reply_markup=complaint_admin_kb(cid))
+        except Exception:
+            pass
+
+
+@dp.message(Command("refund"))
+async def cmd_refund(msg: Message):
+    user_id = msg.from_user.id
+    now = int(time.time())
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT id, item_key, stars, charge_id, created_at FROM payments WHERE user_id=? AND refunded=0 ORDER BY created_at DESC LIMIT 10", (user_id,))
+        payments = await cur.fetchall()
+    if not payments:
+        return await msg.answer(f"💸 <b>Нет покупок для возврата</b>\n\nЕсли ты покупал за ⭐ и хочешь вернуть — напиши админу: @{CONTACT_USERNAME}", reply_markup=bottom_menu())
+    kb_rows = []
+    for pid, key, stars, charge_id, ts in payments:
+        ago = now - ts
+        if ago > REFUND_WINDOW:
+            continue
+        item = SHOP.get(key, {"title": key})
+        left_hours = (REFUND_WINDOW - ago) // 3600
+        kb_rows.append([InlineKeyboardButton(text=f"↩️ {item['title']} — {stars}⭐ (осталось {left_hours}ч)", callback_data=f"refund:{pid}")])
+    if not kb_rows:
+        return await msg.answer("💸 <b>Нет покупок для возврата</b>\n\nПрошло больше 21 дня.", reply_markup=bottom_menu())
+    await msg.answer("💸 <b>Возврат покупки</b>\n\nВыбери покупку. ⭐ вернутся сразу.", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+
+@dp.callback_query(F.data.startswith("refund:"))
+async def cb_refund(cb: CallbackQuery):
+    try:
+        pid = int(cb.data.split(":")[1])
+    except Exception:
+        return await cb.answer("Ошибка", show_alert=True)
+    user_id = cb.from_user.id
+    now = int(time.time())
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT user_id, item_key, stars, charge_id, created_at, refunded FROM payments WHERE id=?", (pid,))
+        row = await cur.fetchone()
+    if not row:
+        return await cb.answer("Платёж не найден", show_alert=True)
+    owner_id, key, stars, charge_id, created_at, refunded = row
+    if owner_id != user_id:
+        return await cb.answer("Не твой платёж", show_alert=True)
+    if refunded:
+        return await cb.answer("Уже возвращён", show_alert=True)
+    if now - created_at > REFUND_WINDOW:
+        return await cb.answer("Прошло больше 21 дня", show_alert=True)
+    if not charge_id:
+        return await cb.answer(f"Нет данных. Напиши @{CONTACT_USERNAME}", show_alert=True)
+    cat = await get_cat(user_id)
+    if key == "food10":
+        await update_cat(user_id, coins=max(0, cat[4] - 100))
+    elif key == "boost":
+        await update_cat(user_id, boost_until=0)
+    elif key == "vip":
+        await update_cat(user_id, vip=0)
+    try:
+        await bot.refund_star_payment(user_id=user_id, telegram_payment_charge_id=charge_id)
+        async with aiosqlite.connect(DB) as db:
+            await db.execute("UPDATE payments SET refunded=1 WHERE id=?", (pid,))
+            await db.commit()
+        await cb.message.edit_text(f"✅ <b>Возврат оформлен</b>\n\n⭐ <b>{stars} звёзд</b> вернулись на твой баланс.\n\nСпасибо, что играл! 🐾")
+        for admin in ADMIN_IDS:
+            try:
+                await bot.send_message(admin, f"↩️ Возврат: <code>{user_id}</code> — {key} {stars}⭐")
+            except Exception:
+                pass
+    except Exception as e:
+        await cb.message.edit_text(f"❌ <b>Ошибка</b>\n\n<code>{e}</code>\n\nНапиши: @{CONTACT_USERNAME}")
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "refund_menu")
+async def cb_refund_menu(cb: CallbackQuery):
+    await cmd_refund(cb.message)
+    await cb.answer()
+
+
+async def _start_complaint(user_id, chat_id):
+    cat = await get_cat(user_id)
+    last = cat[17] if len(cat) > 17 else 0
+    now = int(time.time())
+    if last and now - last < COMPLAINT_COOLDOWN:
+        left = COMPLAINT_COOLDOWN - (now - last)
+        m = left // 60
+        return await bot.send_message(chat_id, f"⏰ Жалобу можно отправить раз в час. Осталось: <b>{m} мин</b>")
+    awaiting_complaint[user_id] = {"step": 1}
+    await bot.send_message(chat_id, COMPLAINT_STEP1)
 
 
 @dp.message(Command("admins"))
@@ -753,7 +829,12 @@ async def cmd_stats(msg: Message):
         total_coins = (await cur.fetchone())[0] or 0
         cur = await db.execute("SELECT COUNT(*) FROM user_skins")
         skins_bought = (await cur.fetchone())[0]
-    await msg.answer(f"📊 <b>Статистика</b>\n\n👥 Юзеров: <b>{total}</b>\n📅 Активных 24ч: <b>{active_day}</b>\n📆 Активных 7д: <b>{active_week}</b>\n👑 VIP: <b>{vips}</b>\n\n💰 Монет: <b>{total_coins}</b>\n🎨 Скинов куплено: <b>{skins_bought}</b>")
+        cur = await db.execute("SELECT COUNT(*) FROM complaints WHERE processed=0")
+        complaints_open = (await cur.fetchone())[0]
+        cur = await db.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments WHERE refunded=0")
+        row = await cur.fetchone()
+        buys, total_stars = row if row else (0, 0)
+    await msg.answer(f"📊 <b>Статистика</b>\n\n👥 Юзеров: <b>{total}</b>\n📅 Активных 24ч: <b>{active_day}</b>\n📆 Активных 7д: <b>{active_week}</b>\n👑 VIP: <b>{vips}</b>\n\n💰 Монет: <b>{total_coins}</b>\n🎨 Скинов: <b>{skins_bought}</b>\n🚨 Жалоб: <b>{complaints_open}</b>\n\n🛒 Покупок: <b>{buys}</b>\n⭐ Звёзд: <b>{total_stars}</b>")
 
 
 @dp.message(Command("ban"))
@@ -790,64 +871,43 @@ async def cmd_unban(msg: Message):
     await msg.answer(f"✅ <code>{target_id}</code> разбанен")
 
 
-@dp.message(Command("admin_log"))
-async def cmd_admin_log(msg: Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    async with aiosqlite.connect(DB) as db:
-        cur = await db.execute("SELECT admin_id, action, target_id, details, created_at FROM admin_actions ORDER BY created_at DESC LIMIT 15")
-        rows = await cur.fetchall()
-    if not rows:
-        return await msg.answer("📭 Логов админов пока нет")
-    text = "👑 <b>Действия админов</b>\n\n"
-    for aid, action, target, details, ts in rows:
-        ago = (int(time.time()) - ts) // 60
-        text += f"<code>{aid}</code> | {action}"
-        if target:
-            text += f" → <code>{target}</code>"
-        text += f" | {ago}м\n"
-    await msg.answer(text)
-
-
 @dp.message(F.text == "🍖 Покормить")
 async def btn_feed(msg: Message):
-    await _do_feed(msg.from_user.id, msg, announce=True)
+    await _do_feed(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎾 Поиграть")
 async def btn_play(msg: Message):
-    await _do_play(msg.from_user.id, msg, announce=True)
+    await _do_play(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎲 Угадай")
 async def btn_guess(msg: Message):
-    await _start_guess(msg.from_user.id, msg, announce=True)
+    await _start_guess(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎁 Бонус дня")
 async def btn_daily(msg: Message):
-    await _do_daily(msg.from_user.id, msg, announce=True)
+    await _do_daily(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🛒 Магазин")
 async def btn_shop(msg: Message):
-    await _show_shop(msg, announce=True)
+    await _show_shop(msg)
 
 
 @dp.message(F.text == "🎨 Скины")
 async def btn_skins(msg: Message):
-    await _show_skins(msg.from_user.id, msg, announce=True)
+    await _show_skins(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "👤 Профиль")
 async def btn_profile(msg: Message):
-    await _show_profile(msg, announce=True)
+    await _show_profile(msg)
 
 
 @dp.message(F.text == "✏️ Имя")
 async def btn_name(msg: Message):
-    await show_announce(msg.chat.id)
-    await asyncio.sleep(0.5)
     cat = await get_cat(msg.from_user.id)
     last_change = cat[15] if len(cat) > 15 else 0
     now = int(time.time())
@@ -862,17 +922,17 @@ async def btn_name(msg: Message):
 
 @dp.message(F.text == "🚧 Скоро")
 async def btn_soon(msg: Message):
-    await _show_soon(msg, announce=True)
+    await _show_soon(msg)
 
 
 @dp.message(F.text == "🚨 Жалоба")
-async def btn_report(msg: Message):
-    await _show_report(msg, announce=True)
+async def btn_complaint(msg: Message):
+    await _start_complaint(msg.from_user.id, msg.chat.id)
 
 
 @dp.message(F.text == "❓ Помощь")
 async def btn_help(msg: Message):
-    await _show_help(msg, announce=True)
+    await _show_help(msg)
 
 
 @dp.message(F.text == "❌ Скрыть меню")
@@ -881,7 +941,7 @@ async def btn_hide(msg: Message):
 
 
 @dp.message(F.text & ~F.text.startswith("/") & ~F.text.regexp(r"^\d+$"))
-async def handle_name_or_delete(msg: Message):
+async def handle_text(msg: Message):
     user_id = msg.from_user.id
     if user_id in awaiting_name:
         new_name = msg.text.strip()
@@ -892,6 +952,27 @@ async def handle_name_or_delete(msg: Message):
         await update_cat(user_id, name=new_name, last_name_change=int(time.time()))
         del awaiting_name[user_id]
         return await msg.answer(f"✅ Имя изменено на <b>{new_name}</b>!", reply_markup=bottom_menu())
+    if user_id in awaiting_complaint:
+        state = awaiting_complaint[user_id]
+        if state["step"] == 1:
+            state["reported"] = msg.text.strip()[:100]
+            state["step"] = 2
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return await msg.answer(COMPLAINT_STEP2, reply_markup=ReplyKeyboardRemove())
+        elif state["step"] == 2:
+            state["reason"] = msg.text.strip()[:1000]
+            state["step"] = 3
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return await msg.answer(
+                f"🚨 <b>Проверь жалобу:</b>\n\n🎯 На: <b>{state['reported']}</b>\n📝 {state['reason']}\n\nОтправить?",
+                reply_markup=complaint_confirm_kb()
+            )
     try:
         await msg.delete()
     except Exception:
@@ -909,8 +990,8 @@ async def handle_name_or_delete(msg: Message):
 @dp.message(F.text.regexp(r"^\d+$"))
 async def guess_handler(msg: Message):
     user_id = msg.from_user.id
-    if user_id in awaiting_name:
-        return await handle_name_or_delete(msg)
+    if user_id in awaiting_name or user_id in awaiting_complaint:
+        return await handle_text(msg)
     game = active_games.get(user_id)
     if not game:
         try:
@@ -943,8 +1024,6 @@ async def guess_handler(msg: Message):
 
 @dp.callback_query(F.data == "refresh")
 async def cb_refresh(cb: CallbackQuery):
-    await show_announce(cb.message.chat.id)
-    await asyncio.sleep(0.5)
     try:
         await cb.message.edit_text(await render_user(cb.from_user.id), reply_markup=main_kb())
     except Exception:
@@ -954,43 +1033,41 @@ async def cb_refresh(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "feed")
 async def cb_feed(cb: CallbackQuery):
-    await _do_feed(cb.from_user.id, cb, announce=True)
+    await _do_feed(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "play")
 async def cb_play(cb: CallbackQuery):
-    await _do_play(cb.from_user.id, cb, announce=True)
+    await _do_play(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "daily")
 async def cb_daily(cb: CallbackQuery):
-    await _do_daily(cb.from_user.id, cb, announce=True)
+    await _do_daily(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "guess")
 async def cb_guess(cb: CallbackQuery):
-    await _start_guess(cb.from_user.id, cb, announce=True)
+    await _start_guess(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "shop")
 async def cb_shop(cb: CallbackQuery):
-    await _show_shop(cb, announce=True)
+    await _show_shop(cb)
 
 
 @dp.callback_query(F.data == "soon")
 async def cb_soon(cb: CallbackQuery):
-    await _show_soon(cb, announce=True)
+    await _show_soon(cb)
 
 
 @dp.callback_query(F.data == "skins_menu")
 async def cb_skins_menu(cb: CallbackQuery):
-    await _show_skins(cb.from_user.id, cb, announce=True)
+    await _show_skins(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "rename")
 async def cb_rename(cb: CallbackQuery):
-    await show_announce(cb.message.chat.id)
-    await asyncio.sleep(0.5)
     cat = await get_cat(cb.from_user.id)
     last_change = cat[15] if len(cat) > 15 else 0
     now = int(time.time())
@@ -1004,17 +1081,86 @@ async def cb_rename(cb: CallbackQuery):
     await cb.answer()
 
 
-@dp.callback_query(F.data == "notif_settings")
-async def cb_notif(cb: CallbackQuery):
-    await show_announce(cb.message.chat.id)
-    await asyncio.sleep(0.5)
-    await cb.message.answer("🔔 <b>Уведомления</b>\n\n/mute — отключить\n/unmute — включить")
+@dp.callback_query(F.data == "complaint")
+async def cb_complaint(cb: CallbackQuery):
+    await _start_complaint(cb.from_user.id, cb.message.chat.id)
     await cb.answer()
 
 
-@dp.callback_query(F.data == "report")
-async def cb_report(cb: CallbackQuery):
-    await _show_report(cb, announce=True)
+@dp.callback_query(F.data == "complaint_send")
+async def cb_complaint_send(cb: CallbackQuery):
+    user_id = cb.from_user.id
+    state = awaiting_complaint.get(user_id)
+    if not state:
+        return await cb.answer("Ошибка", show_alert=True)
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("INSERT INTO complaints(from_user_id, reported_user, reason, created_at) VALUES(?,?,?,?)", (user_id, state["reported"], state["reason"], int(time.time())))
+        await db.commit()
+    await update_cat(user_id, last_complaint=int(time.time()))
+    del awaiting_complaint[user_id]
+    await cb.message.edit_text("✅ <b>Жалоба отправлена!</b>\n\nМы рассмотрим её в ближайшие дни. Спасибо!")
+    for admin in ADMIN_IDS:
+        try:
+            await bot.send_message(admin, f"🚨 <b>Новая жалоба!</b>\n\nОт: <code>{user_id}</code>\nНа: <b>{state['reported']}</b>\n\n📝 {state['reason']}\n\n/complaints — посмотреть все")
+        except Exception:
+            pass
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "complaint_cancel")
+async def cb_complaint_cancel(cb: CallbackQuery):
+    if cb.from_user.id in awaiting_complaint:
+        del awaiting_complaint[cb.from_user.id]
+    await cb.message.edit_text("❌ Жалоба отменена.")
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("cmp_done:"))
+async def cb_cmp_done(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        return await cb.answer("Нет доступа", show_alert=True)
+    cid = int(cb.data.split(":")[1])
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE complaints SET processed=1 WHERE id=?", (cid,))
+        await db.commit()
+    await cb.message.edit_text(f"✅ Жалоба #{cid} обработана")
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("cmp_reject:"))
+async def cb_cmp_reject(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        return await cb.answer("Нет доступа", show_alert=True)
+    cid = int(cb.data.split(":")[1])
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE complaints SET processed=2 WHERE id=?", (cid,))
+        await db.commit()
+    await cb.message.edit_text(f"❌ Жалоба #{cid} отклонена")
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("cmp_ban:"))
+async def cb_cmp_ban(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        return await cb.answer("Нет доступа", show_alert=True)
+    cid = int(cb.data.split(":")[1])
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT reported_user FROM complaints WHERE id=?", (cid,))
+        row = await cur.fetchone()
+    if not row:
+        return await cb.answer("Не найдено", show_alert=True)
+    reported = row[0]
+    try:
+        target_id = int(reported.replace("@", ""))
+    except Exception:
+        await cb.message.edit_text(f"⚠️ Не могу забанить — <b>{reported}</b> не ID.\n\nЗабань вручную: /ban user_id")
+        return await cb.answer()
+    banned_users[target_id] = int(time.time()) + BAN_DURATION
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE complaints SET processed=1 WHERE id=?", (cid,))
+        await db.commit()
+    await cb.message.edit_text(f"🚫 <code>{target_id}</code> забанен. Жалоба #{cid} обработана")
+    await cb.answer()
 
 
 @dp.callback_query(F.data == "mute")
@@ -1040,13 +1186,11 @@ async def cb_select_skin(cb: CallbackQuery):
         return await cb.answer("Сначала купи скин", show_alert=True)
     await set_current_skin(cb.from_user.id, key)
     await cb.answer(f"✅ Применён: {SKINS[key]['name']}")
-    await _show_skins(cb.from_user.id, cb, announce=True)
+    await _show_skins(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data.startswith("buy_skin:"))
 async def cb_buy_skin(cb: CallbackQuery):
-    await show_announce(cb.message.chat.id)
-    await asyncio.sleep(0.5)
     key = cb.data.split(":")[1]
     s = SKINS.get(key)
     if not s:
@@ -1055,7 +1199,7 @@ async def cb_buy_skin(cb: CallbackQuery):
         await add_user_skin(cb.from_user.id, key)
         await set_current_skin(cb.from_user.id, key)
         await cb.answer(f"✅ {s['name']} выбран!")
-        return await _show_skins(cb.from_user.id, cb, announce=False)
+        return await _show_skins(cb.from_user.id, cb)
     cat = await get_cat(cb.from_user.id)
     if cat[4] < s["coins"]:
         return await cb.answer(f"Нужно {s['coins']}💰, у тебя {cat[4]}💰", show_alert=True)
@@ -1067,13 +1211,11 @@ async def cb_buy_skin(cb: CallbackQuery):
         await cb.message.answer(f"🎉 <b>Скин куплен!</b>\n\n{s['emoji']} <b>{s['name']}</b>\nСписано: <b>{s['coins']} монет</b>\n\nОн сразу применён!", reply_markup=bottom_menu())
     except Exception:
         pass
-    await _show_skins(cb.from_user.id, cb, announce=False)
+    await _show_skins(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data.startswith("buy:"))
 async def cb_buy(cb: CallbackQuery):
-    await show_announce(cb.message.chat.id)
-    await asyncio.sleep(0.5)
     key = cb.data.split(":")[1]
     item = SHOP.get(key)
     if not item:
@@ -1175,7 +1317,8 @@ async def setup_commands():
         BotCommand(command="soon", description="🚧 Что скоро"),
         BotCommand(command="help", description="❓ Помощь"),
         BotCommand(command="support", description="🆘 Поддержка"),
-        BotCommand(command="report", description="🚨 Пожаловаться"),
+        BotCommand(command="complaint", description="🚨 Пожаловаться"),
+        BotCommand(command="refund", description="💸 Вернуть звёзды"),
         BotCommand(command="terms", description="📜 Условия"),
         BotCommand(command="mute", description="🔕 Отключить напоминания"),
         BotCommand(command="unmute", description="🔔 Включить напоминания"),
