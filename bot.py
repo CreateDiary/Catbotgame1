@@ -29,6 +29,7 @@ WARN_COOLDOWN = 300
 NAME_COOLDOWN = 86400
 NAME_MAX_LEN = 20
 NAME_MIN_LEN = 2
+ANNOUNCE_COOLDOWN = 86400
 
 SHOP = {
     "food10": {"title": "🍖 Корм x10", "coins": 200, "desc": "+100 монет сразу"},
@@ -56,18 +57,36 @@ SKINS = {
     "fire":    {"emoji": "🔥", "name": "Огненный", "coins": 5000},
 }
 
+ANNOUNCE_TEXT = (
+    "⚠️ <b>ВАЖНОЕ ОБЪЯВЛЕНИЕ</b>\n\n"
+    "Бот может <b>временно отключиться</b> в течение ближайших <b>5 дней</b>.\n\n"
+    "📅 <b>Когда:</b> в течение 5 дней\n"
+    "⏱ <b>На сколько:</b> от 2 часов до 2 дней\n"
+    "❓ <b>Почему:</b> перегрузка сервера, нужно обновить мощности\n\n"
+    "✅ <b>Что сохранится:</b>\n"
+    "• Монеты 💰\n"
+    "• Уровни 📊\n"
+    "• Скины 🎨\n"
+    "• VIP 👑\n"
+    "• Стрики 🔥\n\n"
+    "Все данные <b>сохранятся!</b> После восстановления просто зайдите в бота — всё будет на месте.\n\n"
+    "📌 Следите за обновлениями.\n"
+    "🐾 <i>Спасибо за понимание!</i>"
+)
+
 active_games = {}
 warned_users = {}
 spam_tracker = {}
 banned_users = {}
 awaiting_name = {}
+seen_announcement = {}
 
 
 async def init_db():
     async with aiosqlite.connect(DB) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
-        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0, last_announce INTEGER DEFAULT 0)")
         await db.execute("CREATE TABLE IF NOT EXISTS user_skins (user_id INTEGER, skin_key TEXT, purchased_at INTEGER, PRIMARY KEY (user_id, skin_key))")
         await db.execute("CREATE TABLE IF NOT EXISTS admin_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, action TEXT, target_id INTEGER, details TEXT, created_at INTEGER)")
         await db.commit()
@@ -165,6 +184,13 @@ async def auto_ban(user_id):
             await bot.send_message(admin, f"🚫 Автобан: <code>{user_id}</code>")
         except Exception:
             pass
+
+
+def should_show_announce(user_id, cat):
+    if not cat:
+        return True
+    last_announce = cat[16] if len(cat) > 16 else 0
+    return int(time.time()) - last_announce >= ANNOUNCE_COOLDOWN
 
 
 class AntiSpamMiddleware(BaseMiddleware):
@@ -531,6 +557,14 @@ async def _show_report(target):
         await target.answer()
 
 
+async def _show_announce(user_id, chat_id):
+    try:
+        await bot.send_message(chat_id, ANNOUNCE_TEXT)
+        await update_cat(user_id, last_announce=int(time.time()))
+    except Exception:
+        pass
+
+
 async def _start_guess(user_id, target):
     cat = await get_cat(user_id)
     if cat[4] < 20:
@@ -551,6 +585,9 @@ async def _start_guess(user_id, target):
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     cat = await get_cat(msg.from_user.id)
+    if should_show_announce(msg.from_user.id, cat):
+        await _show_announce(msg.from_user.id, msg.chat.id)
+        await asyncio.sleep(1)
     text = "🐱 <b>Привет! Это твой котик.</b>\n\nКорми, играй, качай уровень.\nСкины — за монеты, имя — меняй!\n\n📌 Кнопки внизу — меню.\n\n" + await render_user(msg.from_user.id)
     if bonus_available(cat):
         text += "\n\n🎁 <b>Бонус дня доступен!</b>"
@@ -618,6 +655,14 @@ async def cmd_cancel(msg: Message):
     if msg.from_user.id in awaiting_name:
         del awaiting_name[msg.from_user.id]
     await msg.answer("Отменено.", reply_markup=bottom_menu())
+
+
+@dp.message(Command("announce"))
+async def cmd_announce(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    await log_admin_action(msg.from_user.id, "announce")
+    await msg.answer(ANNOUNCE_TEXT)
 
 
 @dp.message(Command("admins"))
