@@ -32,7 +32,6 @@ NAME_MAX_LEN = 20
 NAME_MIN_LEN = 2
 COMPLAINT_COOLDOWN = 3600
 REFUND_WINDOW = 1814400
-NOTICE_COOLDOWN = 300
 BROADCAST_COOLDOWN = 3600
 
 SHOP = {
@@ -61,67 +60,12 @@ SKINS = {
     "fire":    {"emoji": "🔥", "name": "Огненный", "coins": 5000},
 }
 
-ANNOUNCE_TEXT = (
-    "╔══════════════════════╗\n"
-    "      ⚙️ <b>ТЕХНИЧЕСКОЕ ОБЪЯВЛЕНИЕ</b> ⚙️\n"
-    "╚══════════════════════╝\n\n"
-    "🐱 <b>Дорогие игроки!</b>\n\n"
-    "Мы следим за работой бота.\n"
-    "Иногда бот может работать <b>медленнее обычного</b> —\n"
-    "это из-за нагрузки на сервер.\n\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "🚀 <b>ЧТО МЫ ДЕЛАЕМ:</b>\n\n"
-    "   • Следим за нагрузкой 24/7\n"
-    "   • Оптимизируем код\n"
-    "   • Если нужно — <b>сменим сервер</b>\n"
-    "     на более мощный\n\n"
-    "После обновления всё будет работать\n"
-    "<b>быстро и стабильно!</b>\n"
-    "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "💰 <b>ВАЖНО ПРО ОПЛАТУ</b>\n\n"
-    "Если ты <b>покупал за ⭐ Stars</b> —\n"
-    "мы <b>вернём тебе звёзды</b>! 💸\n\n"
-    "👉 Нажми /refund\n\n"
-    "📞 <b>Связаться с админами:</b>\n"
-    "   • @Artemchic2009\n"
-    "   • @Andrkaop\n\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "✅ <b>ЧТО СОХРАНЯЕТСЯ:</b>\n\n"
-    "   💰 Монеты\n"
-    "   📊 Уровни\n"
-    "   🎨 Скины\n"
-    "   👑 VIP\n"
-    "   🔥 Стрики\n"
-    "   🏆 Прогресс\n\n"
-    "<b>НИЧЕГО НЕ ТЕРЯЕТСЯ!</b>\n"
-    "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📌 <b>Что делать:</b>\n"
-    "   • Играй как обычно\n"
-    "   • Не паникуй\n"
-    "   • Следи за обновлениями\n\n"
-    "╔══════════════════════╗\n"
-    "   🐾 <i>Спасибо за понимание!</i>\n"
-    "╚══════════════════════╝"
-)
-
-SHORT_NOTICE = (
-    "╭──────────────────────╮\n"
-    "   ⚙️ <b>ТЕХ. ОБЪЯВЛЕНИЕ</b>\n"
-    "╰──────────────────────╯\n\n"
-    "Бот может работать <b>медленнее</b>\n"
-    "из-за нагрузки на сервер.\n\n"
-    "🚀 Мы следим за этим.\n"
-    "Если нужно — <b>сменим сервер</b>.\n\n"
-    "💸 Купил за ⭐ Stars? Вернём: /refund"
-)
-
 active_games = {}
 warned_users = {}
 spam_tracker = {}
 banned_users = {}
 awaiting_name = {}
 awaiting_complaint = {}
-notice_times = {}
 broadcast_times = {}
 
 
@@ -229,19 +173,6 @@ async def auto_ban(user_id):
             await bot.send_message(admin, f"🚫 Автобан: <code>{user_id}</code>")
         except Exception:
             pass
-
-
-async def send_notice(chat_id, user_id=None):
-    if user_id:
-        now = int(time.time())
-        last = notice_times.get(user_id, 0)
-        if now - last < NOTICE_COOLDOWN:
-            return
-        notice_times[user_id] = now
-    try:
-        await bot.send_message(chat_id, SHORT_NOTICE)
-    except Exception:
-        pass
 
 
 class AntiSpamMiddleware(BaseMiddleware):
@@ -650,8 +581,6 @@ async def _start_complaint(user_id, chat_id):
 
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
-    await bot.send_message(msg.chat.id, ANNOUNCE_TEXT)
-    await asyncio.sleep(1)
     cat = await get_cat(msg.from_user.id)
     text = "🐱 <b>Привет! Это твой котик.</b>\n\nКорми, играй, качай уровень.\nСкины — за монеты, имя — меняй!\n\n📌 Кнопки внизу — меню.\n\n" + await render_user(msg.from_user.id)
     if bonus_available(cat):
@@ -719,35 +648,13 @@ async def cmd_cancel(msg: Message):
     await msg.answer("Отменено.", reply_markup=bottom_menu())
 
 
-@dp.message(Command("announce"))
-async def cmd_announce(msg: Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    await log_admin_action(msg.from_user.id, "announce")
-    await msg.answer(ANNOUNCE_TEXT)
-
-
-@dp.message(Command("notice"))
-async def cmd_notice(msg: Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    await log_admin_action(msg.from_user.id, "notice")
-    await msg.answer(SHORT_NOTICE)
-
-
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
         return
     parts = msg.text.split(maxsplit=1)
     if len(parts) < 2:
-        return await msg.answer(
-            "📢 <b>Рассылка</b>\n\n"
-            "Использование:\n"
-            "<code>/broadcast текст объявления</code>\n\n"
-            "Пример:\n"
-            "<code>/broadcast Завтра обновление!</code>"
-        )
+        return await msg.answer("📢 <b>Рассылка</b>\n\nИспользование:\n<code>/broadcast текст</code>")
     text = parts[1].strip()
     if len(text) > 3000:
         return await msg.answer("❌ Слишком длинное сообщение. Максимум 3000 символов.")
@@ -777,12 +684,7 @@ async def cmd_broadcast(msg: Message):
             failed += 1
     broadcast_times[msg.from_user.id] = now
     await log_admin_action(msg.from_user.id, "broadcast", details=text[:100])
-    await msg.answer(
-        f"✅ <b>Рассылка завершена</b>\n\n"
-        f"📨 Всего: <b>{total}</b>\n"
-        f"✅ Доставлено: <b>{sent}</b>\n"
-        f"❌ Не дошло: <b>{failed}</b>"
-    )
+    await msg.answer(f"✅ <b>Рассылка завершена</b>\n\n📨 Всего: <b>{total}</b>\n✅ Доставлено: <b>{sent}</b>\n❌ Не дошло: <b>{failed}</b>")
 
 
 @dp.message(Command("complaint"))
@@ -954,57 +856,41 @@ async def cmd_unban(msg: Message):
 
 @dp.message(F.text == "🍖 Покормить")
 async def btn_feed(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_feed(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎾 Поиграть")
 async def btn_play(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_play(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎲 Угадай")
 async def btn_guess(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _start_guess(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🎁 Бонус дня")
 async def btn_daily(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_daily(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "🛒 Магазин")
 async def btn_shop(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_shop(msg)
 
 
 @dp.message(F.text == "🎨 Скины")
 async def btn_skins(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_skins(msg.from_user.id, msg)
 
 
 @dp.message(F.text == "👤 Профиль")
 async def btn_profile(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_profile(msg)
 
 
 @dp.message(F.text == "✏️ Имя")
 async def btn_name(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     cat = await get_cat(msg.from_user.id)
     last_change = cat[15] if len(cat) > 15 else 0
     now = int(time.time())
@@ -1019,22 +905,16 @@ async def btn_name(msg: Message):
 
 @dp.message(F.text == "🚧 Скоро")
 async def btn_soon(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_soon(msg)
 
 
 @dp.message(F.text == "🚨 Жалоба")
 async def btn_complaint(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _start_complaint(msg.from_user.id, msg.chat.id)
 
 
 @dp.message(F.text == "❓ Помощь")
 async def btn_help(msg: Message):
-    await send_notice(msg.chat.id, msg.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_help(msg)
 
 
@@ -1136,57 +1016,41 @@ async def cb_refresh(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "feed")
 async def cb_feed(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_feed(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "play")
 async def cb_play(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_play(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "daily")
 async def cb_daily(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _do_daily(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "guess")
 async def cb_guess(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _start_guess(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "shop")
 async def cb_shop(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_shop(cb)
 
 
 @dp.callback_query(F.data == "soon")
 async def cb_soon(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_soon(cb)
 
 
 @dp.callback_query(F.data == "skins_menu")
 async def cb_skins_menu(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _show_skins(cb.from_user.id, cb)
 
 
 @dp.callback_query(F.data == "rename")
 async def cb_rename(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     cat = await get_cat(cb.from_user.id)
     last_change = cat[15] if len(cat) > 15 else 0
     now = int(time.time())
@@ -1202,8 +1066,6 @@ async def cb_rename(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "complaint")
 async def cb_complaint(cb: CallbackQuery):
-    await send_notice(cb.message.chat.id, cb.from_user.id)
-    await asyncio.sleep(0.3)
     await _start_complaint(cb.from_user.id, cb.message.chat.id)
     await cb.answer()
 
