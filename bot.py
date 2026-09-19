@@ -73,7 +73,7 @@ async def init_db():
     async with aiosqlite.connect(DB) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
-        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0, last_complaint INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE IF NOT EXISTS cats (user_id INTEGER PRIMARY KEY, name TEXT DEFAULT 'Барсик', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, coins INTEGER DEFAULT 0, satiety INTEGER DEFAULT 100, last_feed INTEGER DEFAULT 0, boost_until INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0, last_remind INTEGER DEFAULT 0, banned_until INTEGER DEFAULT 0, current_skin TEXT DEFAULT 'default', last_name_change INTEGER DEFAULT 0, strikes INTEGER DEFAULT 0, last_complaint INTEGER DEFAULT 0, compensation_given INTEGER DEFAULT 0)")
         await db.execute("CREATE TABLE IF NOT EXISTS user_skins (user_id INTEGER, skin_key TEXT, purchased_at INTEGER, PRIMARY KEY (user_id, skin_key))")
         await db.execute("CREATE TABLE IF NOT EXISTS admin_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, action TEXT, target_id INTEGER, details TEXT, created_at INTEGER)")
         await db.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_key TEXT, stars INTEGER, charge_id TEXT, created_at INTEGER, refunded INTEGER DEFAULT 0)")
@@ -272,6 +272,7 @@ def main_kb():
         [InlineKeyboardButton(text="🎲 Угадай число", callback_data="guess"), InlineKeyboardButton(text="🎁 Бонус дня", callback_data="daily")],
         [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop"), InlineKeyboardButton(text="🎨 Скины", callback_data="skins_menu")],
         [InlineKeyboardButton(text="✏️ Имя", callback_data="rename"), InlineKeyboardButton(text="🚧 Скоро", callback_data="soon")],
+        [InlineKeyboardButton(text="🎁 Компенсация", callback_data="compensation")],
         [InlineKeyboardButton(text="💸 Вернуть звёзды", callback_data="refund_menu")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh")],
     ])
@@ -301,6 +302,7 @@ def profile_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Изменить имя", callback_data="rename")],
         [InlineKeyboardButton(text="🎨 Скины", callback_data="skins_menu")],
+        [InlineKeyboardButton(text="🎁 Компенсация", callback_data="compensation")],
         [InlineKeyboardButton(text="🚧 Что скоро", callback_data="soon")],
         [InlineKeyboardButton(text="🚨 Пожаловаться", callback_data="complaint")],
         [InlineKeyboardButton(text="💸 Вернуть звёзды", callback_data="refund_menu")],
@@ -330,15 +332,16 @@ def bottom_menu():
             [KeyboardButton(text="🎲 Угадай"), KeyboardButton(text="🎁 Бонус дня")],
             [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎨 Скины")],
             [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="✏️ Имя")],
-            [KeyboardButton(text="🚧 Скоро"), KeyboardButton(text="🚨 Жалоба")],
-            [KeyboardButton(text="❓ Помощь"), KeyboardButton(text="❌ Скрыть меню")],
+            [KeyboardButton(text="🎁 Компенсация"), KeyboardButton(text="🚧 Скоро")],
+            [KeyboardButton(text="🚨 Жалоба"), KeyboardButton(text="❓ Помощь")],
+            [KeyboardButton(text="❌ Скрыть меню")],
         ],
         resize_keyboard=True,
         is_persistent=False,
     )
 
 
-HELP_TEXT = "❓ <b>Что делает этот бот?</b>\n\n🐱 <b>Игра-тамагочи про котика.</b>\nКорми, играй, качай уровень, покупай скины за монеты, меняй имя.\n\n<b>🎮 Кнопки внизу:</b>\n🍖 Покормить — +монеты\n🎾 Поиграть — +XP и монеты\n🎲 Угадай — мини-игра\n🎁 Бонус дня — раз в 24ч\n🛒 Магазин — за монеты\n🎨 Скины — за монеты\n👤 Профиль — твой котик\n✏️ Имя — сменить имя\n🚧 Скоро — будущие фичи\n🚨 Жалоба — на юзера\n\n<b>📋 Команды:</b>\n/start, /menu, /daily, /soon, /help\n/complaint — пожаловаться\n/refund — вернуть звёзды\n/terms, /mute, /unmute, /hide\n\n📷 Фото, видео, стикеры, текст удаляются.\n⚠️ Спам = <b>бан 24 часа</b>."
+HELP_TEXT = "❓ <b>Что делает этот бот?</b>\n\n🐱 <b>Игра-тамагочи про котика.</b>\nКорми, играй, качай уровень, покупай скины за монеты, меняй имя.\n\n<b>🎮 Кнопки внизу:</b>\n🍖 Покормить — +монеты\n🎾 Поиграть — +XP и монеты\n🎲 Угадай — мини-игра\n🎁 Бонус дня — раз в 24ч\n🛒 Магазин — за монеты\n🎨 Скины — за монеты\n👤 Профиль — твой котик\n✏️ Имя — сменить имя\n🎁 Компенсация — подарок\n🚧 Скоро — будущие фичи\n🚨 Жалоба — на юзера\n\n<b>📋 Команды:</b>\n/start, /menu, /daily, /soon, /help\n/compensation — компенсация\n/complaint — пожаловаться\n/refund — вернуть звёзды\n/terms, /mute, /unmute, /hide\n\n📷 Фото, видео, стикеры, текст удаляются.\n⚠️ Спам = <b>бан 24 часа</b>."
 
 TERMS_TEXT = "📜 <b>Условия использования</b>\n\n1. Это игра-тамагочи.\n2. Монеты не имеют денежной ценности.\n3. Возврат Stars — /refund, до 21 дня.\n4. Игра «как есть».\n5. Спам запрещён — <b>бан 24 часа</b>.\n6. Право менять условия."
 
@@ -478,6 +481,36 @@ async def _do_daily(user_id, target):
         await target.answer()
 
 
+async def _do_compensation(user_id, chat_id):
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT compensation_given FROM cats WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if row and row[0] == 1:
+            await bot.send_message(
+                chat_id,
+                "✅ <b>Ты уже получил компенсацию!</b>\n\nСпасибо, что остался с нами 🐾",
+                reply_markup=bottom_menu()
+            )
+            return
+        await db.execute(
+            "UPDATE cats SET coins = coins + 2000, vip = 1, compensation_given = 1 WHERE user_id=?",
+            (user_id,)
+        )
+        await db.commit()
+    await bot.send_message(
+        chat_id,
+        "🎁 <b>Компенсация получена!</b>\n\n"
+        "💰 +<b>2000 монет</b>\n"
+        "👑 <b>VIP-статус</b> — бесплатно!\n\n"
+        "<b>VIP даёт:</b>\n"
+        "• +10 монет каждый час\n"
+        "• x2 к бонусу дня\n"
+        "• 👑 значок рядом с именем\n\n"
+        "Спасибо, что остался с нами! 🐾",
+        reply_markup=bottom_menu()
+    )
+
+
 async def _show_shop(target):
     user_id = target.from_user.id if isinstance(target, (Message, CallbackQuery)) else 0
     cat = await get_cat(user_id)
@@ -582,7 +615,7 @@ async def _start_complaint(user_id, chat_id):
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     cat = await get_cat(msg.from_user.id)
-    text = "🐱 <b>Привет! Это твой котик.</b>\n\nКорми, играй, качай уровень.\nСкины — за монеты, имя — меняй!\n\n📌 Кнопки внизу — меню.\n\n" + await render_user(msg.from_user.id)
+    text = "🐱 <b>Привет! Это твой котик.</b>\n\nКорми, играй, качай уровень.\nСкины — за монеты, имя — меняй!\n\n🎁 Не забудь про <b>компенсацию</b> — /compensation\n\n📌 Кнопки внизу — меню.\n\n" + await render_user(msg.from_user.id)
     if bonus_available(cat):
         text += "\n\n🎁 <b>Бонус дня доступен!</b>"
     await msg.answer(text, reply_markup=bottom_menu())
@@ -646,6 +679,63 @@ async def cmd_cancel(msg: Message):
     if msg.from_user.id in awaiting_complaint:
         del awaiting_complaint[msg.from_user.id]
     await msg.answer("Отменено.", reply_markup=bottom_menu())
+
+
+@dp.message(Command("compensation"))
+async def cmd_compensation(msg: Message):
+    await _do_compensation(msg.from_user.id, msg.chat.id)
+
+
+@dp.message(Command("comp_give"))
+async def cmd_comp_give(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    parts = msg.text.split()
+    if len(parts) < 2:
+        return await msg.answer("Использование: <code>/comp_give user_id</code>")
+    try:
+        target_id = int(parts[1])
+    except ValueError:
+        return await msg.answer("Неверный формат")
+    async with aiosqlite.connect(DB) as db:
+        await db.execute(
+            "UPDATE cats SET coins = coins + 2000, vip = 1, compensation_given = 1 WHERE user_id=?",
+            (target_id,)
+        )
+        await db.commit()
+    await log_admin_action(msg.from_user.id, "comp_give", target_id)
+    await msg.answer(f"✅ Компенсация выдана <code>{target_id}</code>")
+    try:
+        await bot.send_message(
+            target_id,
+            "🎁 <b>Тебе выдана компенсация!</b>\n\n💰 +2000 монет\n👑 VIP-статус\n\nСпасибо, что с нами! 🐾",
+            reply_markup=bottom_menu()
+        )
+    except Exception:
+        pass
+
+
+@dp.message(Command("give_all"))
+async def cmd_give_all(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    parts = msg.text.split()
+    if len(parts) < 2:
+        return await msg.answer("Использование: <code>/give_all сумма</code>")
+    try:
+        amount = int(parts[1])
+    except ValueError:
+        return await msg.answer("Сумма должна быть числом")
+    if amount < 1 or amount > 1000000:
+        return await msg.answer("Сумма от 1 до 1000000")
+    await msg.answer(f"⏳ Выдаю всем по <b>{amount} монет</b>...")
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("UPDATE cats SET coins = coins + ?", (amount,))
+        await db.commit()
+        cur = await db.execute("SELECT COUNT(*) FROM cats")
+        total = (await cur.fetchone())[0]
+    await log_admin_action(msg.from_user.id, "give_all", details=f"+{amount}")
+    await msg.answer(f"✅ <b>Выдано!</b>\n\n👥 Юзеров: <b>{total}</b>\n💰 Каждому: <b>+{amount}</b>")
 
 
 @dp.message(Command("broadcast"))
@@ -783,6 +873,12 @@ async def cb_refund_menu(cb: CallbackQuery):
     await cb.answer()
 
 
+@dp.callback_query(F.data == "compensation")
+async def cb_compensation(cb: CallbackQuery):
+    await _do_compensation(cb.from_user.id, cb.message.chat.id)
+    await cb.answer()
+
+
 @dp.message(Command("admins"))
 async def cmd_admins(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
@@ -817,7 +913,9 @@ async def cmd_stats(msg: Message):
         cur = await db.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments WHERE refunded=0")
         row = await cur.fetchone()
         buys, total_stars = row if row else (0, 0)
-    await msg.answer(f"📊 <b>Статистика</b>\n\n👥 Юзеров: <b>{total}</b>\n📅 Активных 24ч: <b>{active_day}</b>\n📆 Активных 7д: <b>{active_week}</b>\n👑 VIP: <b>{vips}</b>\n\n💰 Монет: <b>{total_coins}</b>\n🎨 Скинов: <b>{skins_bought}</b>\n🚨 Жалоб: <b>{complaints_open}</b>\n\n🛒 Покупок: <b>{buys}</b>\n⭐ Звёзд: <b>{total_stars}</b>")
+        cur = await db.execute("SELECT COUNT(*) FROM cats WHERE compensation_given=1")
+        comp_given = (await cur.fetchone())[0]
+    await msg.answer(f"📊 <b>Статистика</b>\n\n👥 Юзеров: <b>{total}</b>\n📅 Активных 24ч: <b>{active_day}</b>\n📆 Активных 7д: <b>{active_week}</b>\n👑 VIP: <b>{vips}</b>\n🎁 Компенсацию получили: <b>{comp_given}</b>\n\n💰 Монет: <b>{total_coins}</b>\n🎨 Скинов: <b>{skins_bought}</b>\n🚨 Жалоб: <b>{complaints_open}</b>\n\n🛒 Покупок: <b>{buys}</b>\n⭐ Звёзд: <b>{total_stars}</b>")
 
 
 @dp.message(Command("ban"))
@@ -901,6 +999,11 @@ async def btn_name(msg: Message):
         return await msg.answer(f"⏰ Имя можно менять раз в 24ч. Осталось: <b>{h}ч {m}м</b>", reply_markup=bottom_menu())
     awaiting_name[msg.from_user.id] = True
     await msg.answer(RENAME_TEXT, reply_markup=ReplyKeyboardRemove())
+
+
+@dp.message(F.text == "🎁 Компенсация")
+async def btn_compensation(msg: Message):
+    await _do_compensation(msg.from_user.id, msg.chat.id)
 
 
 @dp.message(F.text == "🚧 Скоро")
@@ -1297,6 +1400,7 @@ async def setup_commands():
         BotCommand(command="start", description="🐱 Запустить"),
         BotCommand(command="menu", description="📋 Меню"),
         BotCommand(command="daily", description="🎁 Бонус дня"),
+        BotCommand(command="compensation", description="🎁 Компенсация"),
         BotCommand(command="soon", description="🚧 Что скоро"),
         BotCommand(command="help", description="❓ Помощь"),
         BotCommand(command="support", description="🆘 Поддержка"),
