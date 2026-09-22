@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 from aiogram.client.default import DefaultBotProperties
 
-BOT_TOKEN = "8917267408:AAF_9tu6V-OEelOLVzSlke570QotQviJdcY"
+BOT_TOKEN = "8917267408:AAELIzLEPTBC7mMK3WLHeM1cQCFeTReTiFo"
 ADMIN_IDS = [5965370780, 6137912809]
 CONTACT_USERNAME = "Artemchic2009"
 CONTACT_USERNAME_2 = "Andrkaop"
